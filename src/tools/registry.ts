@@ -446,7 +446,7 @@ export const TOOLS: Tool[] = [
     description: "Everyday commands for Git, SSH, Linux, Windows, MSSQL, PgSQL, Redis, NATS, cURL, network, .NET & npm",
     category: "commands",
     icon: TerminalSquare,
-    keywords: ["command", "cheatsheet", "reference", "git", "ssh", "putty", "linux", "windows", "mssql", "postgres", "pgsql", "redis", "nats", "curl", "network", "dotnet", "npm", "terminal", "bash"],
+    keywords: ["command", "cheatsheet", "reference", "git", "ssh", "putty", "linux", "windows", "mssql", "postgres", "pgsql", "redis", "nats", "curl", "network", "dotnet", "npm", "terminal", "bash", "azure", "az cli", "cloud", "aks", "app service", "key vault", "storage"],
     route: "/tools/command-cheatsheet",
     component: L(() => import("./impl/CommandCheatsheet"), "CommandCheatsheet"),
   },
