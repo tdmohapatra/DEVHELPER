@@ -1,0 +1,35 @@
+import {
+  Zap,
+  Braces,
+  Globe,
+  ShieldCheck,
+  HeartPulse,
+  Plug,
+  FlaskConical,
+  Container,
+  Database,
+  MessagesSquare,
+  Activity,
+  Bot,
+  Code,
+  FolderKanban,
+  type LucideIcon,
+} from "lucide-react";
+import type { CategoryId } from "./types";
+
+export const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
+  quick: Zap,
+  data: Braces,
+  api: Globe,
+  security: ShieldCheck,
+  healthcare: HeartPulse,
+  integration: Plug,
+  testing: FlaskConical,
+  devops: Container,
+  database: Database,
+  messaging: MessagesSquare,
+  diagnostics: Activity,
+  ai: Bot,
+  snippets: Code,
+  projects: FolderKanban,
+};
