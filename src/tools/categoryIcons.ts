@@ -13,6 +13,7 @@ import {
   Bot,
   Code,
   FolderKanban,
+  TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
 import type { CategoryId } from "./types";
@@ -32,4 +33,5 @@ export const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
   ai: Bot,
   snippets: Code,
   projects: FolderKanban,
+  commands: TerminalSquare,
 };

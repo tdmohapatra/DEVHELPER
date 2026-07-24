@@ -8,8 +8,8 @@ import type { Tool } from "@/tools/types";
 function Section({ icon, title, tools, empty }: { icon: ReactNode; title: string; tools: Tool[]; empty?: string }) {
   if (tools.length === 0 && empty === undefined) return null;
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+    <section className="mb-9">
+      <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {icon} {title}
       </h2>
       {tools.length === 0 ? (
@@ -34,10 +34,10 @@ export function Dashboard() {
   const quickTools = TOOLS.filter((t) => t.category === "quick");
 
   return (
-    <div className="mx-auto max-w-6xl p-6">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold">Welcome to DevHelper</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+    <div className="mx-auto h-full max-w-6xl overflow-y-auto p-6">
+      <div className="mb-9">
+        <h1 className="text-2xl font-semibold tracking-tight">Welcome to DevHelper</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Your everyday developer toolbox. Press <kbd className="rounded border border-border px-1.5 py-0.5 text-[10px]">Ctrl K</kbd> to search any tool.
         </p>
       </div>

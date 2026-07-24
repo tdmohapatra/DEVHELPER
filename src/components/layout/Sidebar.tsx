@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Wrench, Star, History, Settings } from "lucide-react";
 import { CATEGORIES } from "@/tools/types";
 import { CATEGORY_ICONS } from "@/tools/categoryIcons";
+import { CATEGORY_COLORS } from "@/tools/categoryColors";
 import { toolsByCategory } from "@/tools/registry";
 import { useAppStore, type View } from "@/stores/useAppStore";
 import { cn } from "@/lib/utils";
@@ -16,12 +17,12 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card/40">
-      <div className="flex items-center gap-2 px-4 py-4">
-        <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+      <div className="flex items-center gap-2.5 px-4 py-4">
+        <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
           <Wrench className="size-4" />
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold">DevHelper</div>
+          <div className="text-sm font-semibold tracking-tight">DevHelper</div>
           <div className="text-[11px] text-muted-foreground">Your Everyday Toolbox</div>
         </div>
       </div>
@@ -29,15 +30,16 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 pb-4">
         <NavItem active={isView("dashboard")} onClick={() => openView({ kind: "dashboard" })} icon={<CATEGORY_ICONS.quick className="size-4" />} label="Dashboard" />
 
-        <div className="mt-3">
+        <div className="mt-3 space-y-0.5">
           {CATEGORIES.map((cat) => {
             const tools = toolsByCategory(cat.id);
             if (tools.length === 0) return null;
             const Icon = CATEGORY_ICONS[cat.id];
+            const color = CATEGORY_COLORS[cat.id];
             return (
               <div key={cat.id} className="mb-2">
                 <div className="flex items-center gap-2 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Icon className="size-3.5" />
+                  <Icon className={cn("size-3.5", color.text)} />
                   {cat.label}
                 </div>
                 {tools.map((t) => (
@@ -47,6 +49,7 @@ export function Sidebar() {
                     onClick={() => openTool(t.id)}
                     icon={<t.icon className="size-4" />}
                     label={t.name}
+                    color={color}
                     indent
                   />
                 ))}
@@ -72,6 +75,7 @@ function NavItem({
   label,
   indent,
   badge,
+  color,
 }: {
   active: boolean;
   onClick: () => void;
@@ -79,6 +83,7 @@ function NavItem({
   label: string;
   indent?: boolean;
   badge?: number;
+  color?: { text: string; bg: string };
 }) {
   return (
     <button
@@ -86,7 +91,9 @@ function NavItem({
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
         indent && "pl-4",
-        active ? "bg-primary/15 text-primary" : "text-foreground/80 hover:bg-secondary hover:text-foreground",
+        active
+          ? cn(color ? color.bg : "bg-primary/15", color ? color.text : "text-primary", "font-medium")
+          : "text-foreground/70 hover:bg-secondary hover:text-foreground",
       )}
     >
       <span className="shrink-0">{icon}</span>

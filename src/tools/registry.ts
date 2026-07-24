@@ -38,6 +38,7 @@ import {
   PackageSearch,
   Bookmark,
   FolderKanban,
+  TerminalSquare,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -438,6 +439,16 @@ export const TOOLS: Tool[] = [
     shortcut: "Ctrl+Shift+P",
     component: L(() => import("./impl/PortChecker"), "PortChecker"),
     requiresNative: true,
+  },
+  {
+    id: "command-cheatsheet",
+    name: "Command Reference",
+    description: "Everyday commands for Git, SSH, Linux, Windows, MSSQL, PgSQL, Redis, NATS, cURL, network, .NET & npm",
+    category: "commands",
+    icon: TerminalSquare,
+    keywords: ["command", "cheatsheet", "reference", "git", "ssh", "putty", "linux", "windows", "mssql", "postgres", "pgsql", "redis", "nats", "curl", "network", "dotnet", "npm", "terminal", "bash"],
+    route: "/tools/command-cheatsheet",
+    component: L(() => import("./impl/CommandCheatsheet"), "CommandCheatsheet"),
   },
 ];
 

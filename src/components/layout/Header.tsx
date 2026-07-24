@@ -11,7 +11,7 @@ export function Header({ onOpenPalette }: { onOpenPalette: () => void }) {
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
       <button
         onClick={onOpenPalette}
-        className="flex h-9 max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-secondary/50 px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary"
+        className="flex h-9 max-w-md flex-1 items-center gap-2 rounded-md border border-border bg-secondary/50 px-3 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-secondary hover:text-foreground"
       >
         <Search className="size-4" />
         <span>Search tools…</span>

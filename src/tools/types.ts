@@ -17,6 +17,7 @@ export const CATEGORIES = [
   { id: "ai", label: "AI Assistant", icon: "Bot" },
   { id: "snippets", label: "Snippets", icon: "Code" },
   { id: "projects", label: "Project Profiles", icon: "FolderKanban" },
+  { id: "commands", label: "Command Reference", icon: "TerminalSquare" },
 ] as const;
 
 export type CategoryId = (typeof CATEGORIES)[number]["id"];
