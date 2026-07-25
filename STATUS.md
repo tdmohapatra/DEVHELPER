@@ -30,9 +30,10 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 - [x] `envCompare.ts` pure logic (`diffVariables`/`diffConnections`/`countStates`/
       `isSecretKey`/`maskValue`) + 6 unit tests. 125 JS tests. Typecheck + build clean.
 
-### Next increment
-- [ ] Cross-tool consumption: DB Toolkit / API Tester "use this environment's connection"
-      (one-click connect from the active env's typed refs).
+### Cross-tool consumption (done 2026-07-26)
+- [x] Environment `database` ref → "Open in DB Toolkit" (creates the connection, navigates,
+      selects it). Database Toolkit → "From environment" prefill from the active env's db refs.
+- [x] `dbConnectionFromEnvRef` / `normalizeEngine` shared helpers (+4 tests). 129 JS tests.
 
 ---
 

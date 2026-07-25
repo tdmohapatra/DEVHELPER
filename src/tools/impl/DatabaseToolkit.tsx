@@ -29,11 +29,13 @@ import { toast } from "@/components/ui/toast";
 import { invokeNative, isTauri } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { useDbStore } from "@/stores/useDbStore";
+import { useApiStore } from "@/stores/useApiStore";
 import {
   DB_ENGINES,
   DEFAULT_PORTS,
   buildConnString,
   connTarget,
+  dbConnectionFromEnvRef,
   type DbConnection,
   type DbEngine,
   type DbObject,
@@ -87,6 +89,9 @@ export function DatabaseToolkit() {
   const passwords = useDbStore((s) => s.passwords);
 
   const active = connections.find((c) => c.id === activeId) ?? null;
+
+  const activeEnv = useApiStore((s) => s.environments.find((e) => e.id === s.activeEnvId));
+  const envDbRefs = (activeEnv?.connections ?? []).filter((c) => c.kind === "database");
 
   const [editing, setEditing] = useState<DbConnection | null>(null);
   const [tab, setTab] = useState<Tab>("query");
@@ -277,6 +282,21 @@ export function DatabaseToolkit() {
               <RefreshCw className={cn("size-3.5", detecting && "animate-spin")} /> Detect local
             </Button>
           </div>
+
+          {envDbRefs.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => {
+                const ref = envDbRefs.find((r) => r.id === e.target.value);
+                if (ref) setEditing({ ...dbConnectionFromEnvRef(ref, activeEnv!.name), id: "" });
+              }}
+              className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+              title="Prefill a connection from the active environment"
+            >
+              <option value="">From environment ({activeEnv?.name})…</option>
+              {envDbRefs.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          )}
 
           {detected && (
             <div className="rounded-md border border-border bg-secondary/30 p-2">

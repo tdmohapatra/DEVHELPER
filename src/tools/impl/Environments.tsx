@@ -7,6 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { cn } from "@/lib/utils";
 import { useApiStore } from "@/stores/useApiStore";
+import { useDbStore } from "@/stores/useDbStore";
+import { useAppStore } from "@/stores/useAppStore";
+import { toast } from "@/components/ui/toast";
+import { dbConnectionFromEnvRef } from "@/tools/lib/dbTypes";
 import type { Environment, EnvConnection, EnvConnKind } from "@/tools/lib/apiTypes";
 import { diffVariables, diffConnections, countStates, maskValue, type DiffState } from "@/tools/lib/envCompare";
 
@@ -159,6 +163,7 @@ function EnvEditor({ env, active, onUpdate, onSetActive, onDelete }: { env: Envi
           <ConnectionRow
             key={c.id}
             conn={c}
+            envName={env.name}
             onChange={(next) => setConnections(connections.map((x) => (x.id === c.id ? next : x)))}
             onRemove={() => setConnections(connections.filter((x) => x.id !== c.id))}
           />
@@ -169,16 +174,27 @@ function EnvEditor({ env, active, onUpdate, onSetActive, onDelete }: { env: Envi
   );
 }
 
-function ConnectionRow({ conn, onChange, onRemove }: { conn: EnvConnection; onChange: (c: EnvConnection) => void; onRemove: () => void }) {
+function ConnectionRow({ conn, envName, onChange, onRemove }: { conn: EnvConnection; envName: string; onChange: (c: EnvConnection) => void; onRemove: () => void }) {
   const meta = KIND_META[conn.kind];
   const Icon = meta.icon;
   const setField = (k: string, v: string) => onChange({ ...conn, fields: { ...conn.fields, [k]: v } });
+
+  const openInDbToolkit = () => {
+    const id = useDbStore.getState().upsert(dbConnectionFromEnvRef(conn, envName));
+    useDbStore.getState().setActive(id);
+    useAppStore.getState().openTool("database-toolkit");
+    toast.success(`Opened "${envName} · ${conn.name}" in Database Toolkit`);
+  };
+
   return (
     <div className="rounded-md border border-border p-2">
       <div className="flex items-center gap-2">
         <Icon className="size-4 text-muted-foreground" />
         <Input className="h-7 w-40 text-sm" value={conn.name} onChange={(e) => onChange({ ...conn, name: e.target.value })} />
         <Badge variant="outline" className="text-[10px]">{meta.label}</Badge>
+        {conn.kind === "database" && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={openInDbToolkit}><Database className="size-3.5" /> Open in DB Toolkit</Button>
+        )}
         <button onClick={onRemove} className="ml-auto text-muted-foreground hover:text-destructive" title="Remove"><Trash2 className="size-3.5" /></button>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">

@@ -1,3 +1,5 @@
+import type { EnvConnection } from "./apiTypes";
+
 /** Database engines supported by the Database Toolkit. */
 export type DbEngine = "postgres" | "sqlite" | "mssql" | "mysql" | "oracle";
 
@@ -89,4 +91,34 @@ export function buildConnString(conn: DbConnection, password: string): string {
 export function connTarget(conn: DbConnection): string {
   if (conn.engine === "sqlite") return conn.filePath || "(no file)";
   return `${conn.host || "localhost"}:${conn.port || DEFAULT_PORTS[conn.engine] || "?"}/${conn.database || ""}`;
+}
+
+/** Map a loose engine string (from an env ref) onto a supported DbEngine. */
+export function normalizeEngine(v?: string): DbEngine {
+  const s = (v || "").toLowerCase();
+  if (s.includes("postgre") || s === "pg") return "postgres";
+  if (s.includes("mysql") || s.includes("maria")) return "mysql";
+  if (s.includes("mssql") || s.includes("sqlserver") || s.includes("sql server") || s === "tds") return "mssql";
+  if (s.includes("sqlite")) return "sqlite";
+  if (s.includes("oracle")) return "oracle";
+  return "postgres";
+}
+
+/** Build a DbConnection (minus id) from an environment's typed `database` connection ref. */
+export function dbConnectionFromEnvRef(ref: EnvConnection, envName: string): Omit<DbConnection, "id"> {
+  const f = ref.fields;
+  const engine = normalizeEngine(f.engine);
+  return {
+    name: `${envName} · ${ref.name}`,
+    engine,
+    host: f.host || "localhost",
+    port: f.port ? Number(f.port) : DEFAULT_PORTS[engine],
+    database: f.database || "",
+    user: f.user || "",
+    filePath: engine === "sqlite" ? f.database || f.filePath || "" : undefined,
+    environment: envName,
+    isProduction: /prod/i.test(envName),
+    safeMode: true,
+    trustServerCertificate: true,
+  };
 }

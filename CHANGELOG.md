@@ -12,6 +12,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Environment Compare** — diff two environments' variables and connections
   (added / removed / changed / same) with counts, "hide identical", and **secret masking**
   (auto-detected sensitive keys, reveal toggle). New `envCompare` lib (+6 unit tests).
+- **Cross-tool connect** — an environment's `database` ref opens directly in the Database
+  Toolkit ("Open in DB Toolkit"), and the Database Toolkit can prefill a connection "From
+  environment". Shared `dbConnectionFromEnvRef` / `normalizeEngine` helpers (+4 unit tests).
 
 ### Added — Trace Explorer
 - New **Trace Explorer** tool (diagnostics): enter a correlation / trace / request id and
