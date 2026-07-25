@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Cron Expression tool
+- New **Cron Expression** tool (quick): parse/validate 5- and 6-field cron expressions
+  (`*`, ranges, `*/n` steps, lists, month/day names, Vixie DOM/DOW OR semantics), read them
+  in plain English, and preview the **next run times** in local time with relative offsets.
+  Presets included. New `cron` lib (parseField / parseCron / matches / nextRuns / describe)
+  with 8 unit tests. Pure-TS, no dependencies.
+
 ### Added — Trace Explorer service-flow diagram
 - Trace Explorer now renders the reconstructed path as an **SVG service-flow diagram**
   (nodes colored by worst status, edges labelled with inter-service latency) instead of

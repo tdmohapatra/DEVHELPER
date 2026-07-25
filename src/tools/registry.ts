@@ -43,6 +43,7 @@ import {
   Bug as BugIcon,
   Route as RouteIcon,
   FileCog,
+  CalendarClock,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -494,6 +495,16 @@ export const TOOLS: Tool[] = [
     keywords: ["config", "appsettings", "configuration", "dotnet", ".net", "environment", "compare", "diff", "secrets", "json"],
     route: "/tools/config-inspector",
     component: L(() => import("./impl/ConfigInspector"), "ConfigInspector"),
+  },
+  {
+    id: "cron",
+    name: "Cron Expression",
+    description: "Parse, validate and explain a cron expression; preview the next run times (5- and 6-field)",
+    category: "quick",
+    icon: CalendarClock,
+    keywords: ["cron", "crontab", "schedule", "cronjob", "quartz", "next run", "expression", "timer"],
+    route: "/tools/cron",
+    component: L(() => import("./impl/CronTool"), "CronTool"),
   },
 ];
 
