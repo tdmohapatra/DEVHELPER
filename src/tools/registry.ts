@@ -41,6 +41,7 @@ import {
   TerminalSquare,
   Database as DatabaseIcon,
   Bug as BugIcon,
+  Route as RouteIcon,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -472,6 +473,16 @@ export const TOOLS: Tool[] = [
     keywords: ["debug", "session", "timeline", "trace", "correlation", "root cause", "diagnose", "incident", "logs", "distributed"],
     route: "/tools/debug-session",
     component: L(() => import("./impl/DebugSession"), "DebugSession"),
+  },
+  {
+    id: "trace-explorer",
+    name: "Trace Explorer",
+    description: "Enter a correlation/trace/request id and reconstruct its path across every captured source — timeline, service flow, failure point",
+    category: "diagnostics",
+    icon: RouteIcon,
+    keywords: ["trace", "correlation", "request id", "explorer", "distributed", "span", "flow", "root cause", "opentelemetry", "otel"],
+    route: "/tools/trace-explorer",
+    component: L(() => import("./impl/TraceExplorer"), "TraceExplorer"),
   },
 ];
 

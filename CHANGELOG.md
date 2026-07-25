@@ -5,6 +5,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Trace Explorer
+- New **Trace Explorer** tool (diagnostics): enter a correlation / trace / request id and
+  reconstruct its path across every captured Debug Session event (plus optional pasted
+  logs). Shows a unified timeline with inter-event deltas, an ordered **service flow**
+  (A → B → C with worst-status rollup), and a **summary** (span duration, error count,
+  failure point). "Known ids" quick-pick, Diagnose with AI, export, and one-click
+  "create a Debug Session from this trace".
+- New pure logic: `eventMatchesId`, `serviceFlow`, `traceSummary` (+3 unit tests).
+
 ### Added — Debug Session live capture (increment 2)
 - Reusable **`AddToDebug`** button — one-click capture of a tool's result onto the active
   Debug Session timeline (auto-creates a "Captured" session if none).

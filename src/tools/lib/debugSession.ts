@@ -219,6 +219,73 @@ export function correlationIds(events: DebugEvent[]): string[] {
   return [...seen];
 }
 
+/** True if an event carries the given id in its correlation/trace fields or text. */
+export function eventMatchesId(e: DebugEvent, id: string): boolean {
+  const q = id.trim();
+  if (!q) return false;
+  if (e.correlationId === q || e.traceId === q) return true;
+  return [e.title, e.payload, e.error].filter(Boolean).join(" ").includes(q);
+}
+
+export interface ServiceHop {
+  service: string;
+  status: DebugStatus;
+  count: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+/** Roll up matched events into an ordered service-to-service flow (by first appearance). */
+export function serviceFlow(events: DebugEvent[]): ServiceHop[] {
+  const order: string[] = [];
+  const map = new Map<string, ServiceHop>();
+  for (const e of sortEvents(events)) {
+    const service = e.service || "(unknown)";
+    let hop = map.get(service);
+    if (!hop) {
+      hop = { service, status: "info", count: 0, firstAt: e.at, lastAt: e.at };
+      map.set(service, hop);
+      order.push(service);
+    }
+    hop.count += 1;
+    hop.lastAt = Math.max(hop.lastAt, e.at);
+    hop.firstAt = Math.min(hop.firstAt, e.at);
+    hop.status = worstStatus(hop.status, e.status);
+  }
+  return order.map((s) => map.get(s)!);
+}
+
+const STATUS_RANK: Record<DebugStatus, number> = { error: 4, warn: 3, pending: 2, ok: 1, info: 0 };
+function worstStatus(a: DebugStatus, b: DebugStatus): DebugStatus {
+  return STATUS_RANK[b] > STATUS_RANK[a] ? b : a;
+}
+
+export interface TraceSummary {
+  count: number;
+  errors: number;
+  startAt: number;
+  endAt: number;
+  durationMs: number;
+  /** The first error event in time order, i.e. the likely failure point. */
+  failurePoint?: DebugEvent;
+}
+
+/** Summarize a set of matched events: span duration, error count, first failure. */
+export function traceSummary(events: DebugEvent[]): TraceSummary {
+  const sorted = sortEvents(events);
+  const errors = sorted.filter((e) => e.status === "error");
+  const startAt = sorted.length ? sorted[0].at : 0;
+  const endAt = sorted.length ? sorted[sorted.length - 1].at : 0;
+  return {
+    count: sorted.length,
+    errors: errors.length,
+    startAt,
+    endAt,
+    durationMs: endAt - startAt,
+    failurePoint: errors[0],
+  };
+}
+
 function fmtTime(at: number): string {
   const d = new Date(at);
   const p = (n: number, w = 2) => String(n).padStart(w, "0");

@@ -41,9 +41,15 @@ works in browser + desktop.
       **Database Toolkit** (query success + error), **SOAP Tester** (response).
 - [x] Typecheck + 116 JS tests + build clean. Any other tool adopts capture in one line.
 
+### Trace Explorer (done 2026-07-26)
+- [x] Search a correlation/trace/request id across all captured Debug Session events +
+      optional pasted logs. Unified timeline (with +Δms between events), ordered service
+      flow with worst-status rollup, summary (span/errors/failure point), known-id
+      quick-pick, AI diagnose, export, "create Debug Session from trace".
+- [x] Pure logic `eventMatchesId` / `serviceFlow` / `traceSummary` (+3 tests). 119 JS tests.
+
 ### Next increments
-- [ ] Trace Explorer (search a correlation/trace id across sources).
-- [ ] Visual service-flow diagram from the timeline.
+- [ ] Visual service-flow diagram (mermaid) from the timeline.
 - [ ] Capture from messaging tools (Redis/NATS/RabbitMQ) + Error Explainer / Stack Trace.
 
 ---

@@ -6,6 +6,9 @@ import {
   sortEvents,
   filterEvents,
   correlationIds,
+  eventMatchesId,
+  serviceFlow,
+  traceSummary,
   toMarkdown,
   buildAiContext,
   type DebugEvent,
@@ -105,6 +108,42 @@ describe("filterEvents", () => {
 describe("correlationIds", () => {
   it("returns distinct ids in chronological first-seen order", () => {
     expect(correlationIds(sample)).toEqual(["c-1", "c-2"]);
+  });
+});
+
+const flow: DebugEvent[] = [
+  { id: "a", at: 100, source: "api", title: "POST /orders", status: "ok", service: "OrderApi", correlationId: "ord-9", traceId: "t-1", durationMs: 20 },
+  { id: "b", at: 200, source: "nats", title: "OrderCreated", status: "ok", service: "OrderSvc", correlationId: "ord-9" },
+  { id: "c", at: 300, source: "database", title: "INSERT payment", status: "error", service: "PaymentSvc", correlationId: "ord-9", error: "deadlock" },
+  { id: "d", at: 150, source: "log", title: "unrelated", status: "info", service: "Other", correlationId: "zzz" },
+];
+
+describe("eventMatchesId", () => {
+  it("matches on correlation id, trace id, and text", () => {
+    expect(eventMatchesId(flow[0], "ord-9")).toBe(true);
+    expect(eventMatchesId(flow[0], "t-1")).toBe(true);
+    expect(eventMatchesId(flow[0], "/orders")).toBe(true);
+    expect(eventMatchesId(flow[3], "ord-9")).toBe(false);
+    expect(eventMatchesId(flow[0], "")).toBe(false);
+  });
+});
+
+describe("serviceFlow", () => {
+  it("orders services by first appearance and rolls up the worst status", () => {
+    const hops = serviceFlow(flow.filter((e) => e.correlationId === "ord-9"));
+    expect(hops.map((h) => h.service)).toEqual(["OrderApi", "OrderSvc", "PaymentSvc"]);
+    expect(hops[2].status).toBe("error");
+    expect(hops[0].count).toBe(1);
+  });
+});
+
+describe("traceSummary", () => {
+  it("computes span duration, error count and first failure point", () => {
+    const s = traceSummary(flow.filter((e) => e.correlationId === "ord-9"));
+    expect(s.count).toBe(3);
+    expect(s.errors).toBe(1);
+    expect(s.durationMs).toBe(200); // 300 - 100
+    expect(s.failurePoint?.id).toBe("c");
   });
 });
 
