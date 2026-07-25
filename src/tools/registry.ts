@@ -39,6 +39,7 @@ import {
   Bookmark,
   FolderKanban,
   TerminalSquare,
+  Database as DatabaseIcon,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -449,6 +450,17 @@ export const TOOLS: Tool[] = [
     keywords: ["command", "cheatsheet", "reference", "git", "ssh", "putty", "linux", "windows", "mssql", "postgres", "pgsql", "redis", "nats", "curl", "network", "dotnet", "npm", "terminal", "bash", "azure", "az cli", "cloud", "aks", "app service", "key vault", "storage"],
     route: "/tools/command-cheatsheet",
     component: L(() => import("./impl/CommandCheatsheet"), "CommandCheatsheet"),
+  },
+  {
+    id: "database-toolkit",
+    name: "Database Toolkit",
+    description: "Connect to PostgreSQL/MySQL/SQL Server/SQLite, explore objects, run queries with safe-mode, export & generate code",
+    category: "database",
+    icon: DatabaseIcon,
+    keywords: ["database", "db", "sql", "postgres", "postgresql", "mysql", "mariadb", "sqlserver", "mssql", "oracle", "sqlite", "query", "table", "schema", "connection", "explorer"],
+    route: "/tools/database-toolkit",
+    component: L(() => import("./impl/DatabaseToolkit"), "DatabaseToolkit"),
+    requiresNative: true,
   },
 ];
 

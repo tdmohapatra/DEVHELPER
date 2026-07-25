@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{docker, files, network, ports, process, redis, sysprobe, system};
+use commands::{db, docker, files, network, ports, process, redis, sysprobe, system};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
@@ -66,6 +66,9 @@ pub fn run() {
             sysprobe::check_environment,
             files::read_text_file,
             redis::redis_exec,
+            db::db_test,
+            db::db_query,
+            db::db_objects,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevHelper");

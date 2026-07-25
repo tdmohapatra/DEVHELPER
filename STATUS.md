@@ -20,6 +20,83 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 
 ---
 
+## 2026-07-25 — MSSQL connectivity fix + local-server detection
+
+Addressing "can't connect to local SQL Server with credentials".
+
+- [x] **tiberius TLS switched rustls → native-tls (Windows SChannel)** — the usual cause
+      of local SQL Server handshake failures. Added `winauth` for Windows/integrated auth.
+- [x] Connection form (MSSQL): **Windows authentication** toggle, **Trust server
+      certificate** toggle (default on), per-field guidance (dynamic ports, TCP/IP enable,
+      mixed-mode auth). `buildConnString` emits `IntegratedSecurity=SSPI` /
+      `TrustServerCertificate` accordingly.
+- [x] **Detect local servers** — probes localhost:1433/5432/3306/1521 (`tcp_check`) and
+      scans for sqlservr/postgres/mysqld/tnslsnr (`list_processes`); one-click prefill.
+- [x] Named-instance SQL Browser auto-resolution NOT wired (needs a tiberius feature) —
+      form guides the user to enter the instance's actual TCP port instead.
+- [x] cargo check + test, typecheck, 100 JS tests, vite build, **`tauri:build` all clean**.
+      Desktop exe rebuilt at 9.3 MB (DB drivers add ~2 MB).
+
+> Still runtime-unverified against a live SQL Server (none here). The native-tls change is
+> the standard fix; if SQL login still fails it's server-side auth mode / TCP-IP / port.
+
+---
+
+## 2026-07-25 — Database Toolkit engines: MySQL, SQL Server, Oracle
+
+Added the remaining engines on top of increment 1's provider abstraction.
+
+- [x] **MySQL / MariaDB** — `mysql_async` (rustls). Values mapped from `mysql_async::Value`
+      (incl. DATE/TIME formatting).
+- [x] **SQL Server** — `tiberius` over tokio TCP (`tokio-util` compat), `trust_cert` for
+      dev. Values via a typed `try_get` cascade (str/i16/i32/i64/u8/f32/f64/bool/decimal/
+      uuid/datetime/date). Object listing reuses `information_schema`.
+- [x] **Oracle** — implemented but **feature-gated** (`--features oracle`). The `oracle`
+      crate needs Oracle Instant Client (ODPI-C) at build+runtime; kept off the default
+      build so DevHelper still compiles everywhere. UI flags it "needs special build".
+- [x] `cargo check` + `cargo test --lib` clean (2 SQLite tests). Typecheck + 100 JS tests
+      + production build clean.
+
+> **Verification honesty:** SQLite is runtime-verified (native tests). PostgreSQL/MySQL/
+> SQL Server are **compile-verified only** — runtime needs live servers, which weren't
+> available in this environment. Oracle is not compiled here (no Instant Client).
+
+---
+
+## 2026-07-25 — Database Toolkit (increment 1: PostgreSQL + SQLite)
+
+First slice of the post-v1 "CREATE → TEST → INTEGRATE → INSPECT → DIAGNOSE" roadmap.
+Additive — no existing tool code changed.
+
+### Native (Rust)
+- [x] New `commands/db.rs` with a provider-shaped surface: `db_test`, `db_query`,
+      `db_objects` (async commands). PostgreSQL via **tokio-postgres** (simple-query
+      protocol → every value returned as text, no per-type extraction); SQLite via
+      **rusqlite** (`bundled`) on the blocking pool. Hard row cap 5000.
+- [x] `cargo check` clean; **2 native SQLite tests** (DDL/insert/select roundtrip incl.
+      NULL handling + affected counts; max-rows truncation) — passing.
+
+### Frontend
+- [x] `Database Toolkit` tool (category `database`): connection rail (create/edit/
+      duplicate/delete, prod badge), **session-only passwords** (never persisted —
+      `useDbStore` partializes them out), object explorer, SQL runner, results grid with
+      row #/NULL styling, CSV/JSON export, code-gen (C# class/record, EF entity, TS
+      interface, JSON example).
+- [x] **SQL safe-mode** (`sqlSafety.ts`): strips comments/strings then flags
+      DROP/TRUNCATE, unfiltered UPDATE/DELETE, ALTER/CREATE. Risky SQL requires confirm;
+      safe-mode connections block writes.
+- [x] `dbCodegen.ts` infers column types from sampled rows → C#/EF/TS/JSON.
+- [x] +23 unit tests (sqlSafety 16, dbCodegen 7) — **100 JS tests passing**. Typecheck +
+      production build clean; tool lazy-split (~7.2 kB gzip), main bundle unchanged.
+
+### Deferred (next increments)
+- [ ] SQL Server (tiberius) — increment 2.
+- [ ] Monaco editor for the SQL surface — increment 3 (separate from the DB drivers).
+- [ ] Secure OS credential storage (DPAPI / Credential Manager) for passwords.
+- [ ] Result pagination/virtualization; per-object schema view; schema diff.
+
+---
+
 ## 2026-07-24 — Phase 1 complete (Foundation + Core MVP)
 
 ### Project scaffold

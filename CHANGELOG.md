@@ -3,6 +3,41 @@
 All notable changes to DevHelper are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Post-v1 evolution, 2026-07-25
+
+### Added — UI theming & Command Reference
+- Per-category accent colors across sidebar, tool cards and nav (`categoryColors.ts`).
+- **Command Reference** tool — tabbed, usage-grouped cheatsheet (Git, SSH/PuTTY, Linux,
+  Windows, MSSQL, PgSQL, Redis, NATS, cURL, Network, .NET, npm, Azure/Cloud) with
+  hover-info tooltips, copy buttons and destructive-command flags.
+
+### Added — Database Toolkit engines (MySQL, SQL Server, Oracle)
+- **MySQL / MariaDB** via mysql_async and **SQL Server** via tiberius (tokio TCP, typed
+  value cascade → text). Both compile clean; runtime needs a live server (not verified in
+  this environment).
+- **Oracle** implemented but **feature-gated** (`cargo build --features oracle`): the
+  `oracle` crate needs Oracle Instant Client (ODPI-C) at build+runtime, so it is OFF by
+  default and the standard build never links it. UI marks Oracle "needs special build".
+- Frontend: engine list, default ports and connection-string builders for all five
+  engines; Postgres `postgresql://`, MySQL `mysql://`, SQL Server tiberius ADO string,
+  Oracle `user/pass@//host:port/service`.
+
+### Added — Database Toolkit (increment 1: PostgreSQL + SQLite)
+- New **Database Toolkit** tool: connection manager (session-only passwords, never
+  persisted to disk), object explorer (tables/views/procedures/functions), SQL runner,
+  results grid, CSV/JSON export, and code generation (C# class/record, EF Core entity,
+  TS interface, JSON example).
+- **SQL safe-mode**: static analysis flags DROP/TRUNCATE, unfiltered UPDATE/DELETE and
+  schema changes; risky statements need explicit confirm; safe-mode connections block
+  writes outright.
+- Native Rust `db` commands (`db_test`/`db_query`/`db_objects`): PostgreSQL via
+  tokio-postgres (simple-query, text values) and SQLite via rusqlite (bundled). Async
+  commands; SQLite runs on the blocking pool.
+- Tests: +23 frontend unit tests (sqlSafety, dbCodegen) and 2 native Rust tests for the
+  SQLite path — **100 JS tests + 2 Rust tests passing**.
+- Deferred to next increments: SQL Server (tiberius), Monaco editor for the SQL surface,
+  secure OS credential storage.
+
 ## [Unreleased] — Phases 4–6 (DevOps, AI, Power User), 2026-07-24
 
 ### Added — Phase 4 (DevOps & Integration)

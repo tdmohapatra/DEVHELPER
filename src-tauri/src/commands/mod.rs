@@ -6,3 +6,4 @@ pub mod network;
 pub mod sysprobe;
 pub mod files;
 pub mod redis;
+pub mod db;
