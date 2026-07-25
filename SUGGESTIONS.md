@@ -43,7 +43,7 @@ Legend: ✅ done · 🔨 in progress · ⬜ todo · 🔒 blocked/needs infra
 - ✅ **Table data browser** — paginated `SELECT *` (next/prev), row count.
 
 ## Priority 2b — DB monitoring & admin (next, mostly MSSQL first)
-- ⬜ **Monitoring panel**: active sessions / who's connected (`sys.dm_exec_sessions`+`requests` / `sp_who2`), **blocking & locks** (`sys.dm_tran_locks`), **last-modified objects** (`sys.objects.modify_date`), DB size.
+- ✅ **Monitoring panel**: active sessions (+kill), blocking & locks, last-modified objects, DB size (MSSQL DMVs + PG/MySQL equivalents).
 - ⬜ **Backup** — generate + run `BACKUP DATABASE … TO DISK` (confirm; safe).
 - ⬜ **Restore** — generate `RESTORE DATABASE …` script; **do not auto-run** (destructive) — show for review / require strong confirm.
 - ⚠️ **Recover deleted data** — NOT generally possible after the fact. Only via: a prior backup (restore + copy rows), **temporal/system-versioned tables** (`FOR SYSTEM_TIME`), or CDC/log tools. Provide guidance + temporal-history query helper, not a magic undelete.

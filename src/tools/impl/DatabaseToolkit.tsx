@@ -43,6 +43,7 @@ import {
 } from "@/tools/lib/dbTypes";
 import { analyzeSql, isWriteSql, highestRisk } from "@/tools/lib/sqlSafety";
 import { DbObjectDetails } from "@/tools/impl/DbObjectDetails";
+import { DbMonitor } from "@/tools/impl/DbMonitor";
 import {
   inferColumns,
   toCsharpClass,
@@ -53,7 +54,7 @@ import {
   toInsert,
 } from "@/tools/lib/dbCodegen";
 
-type Tab = "explorer" | "query";
+type Tab = "explorer" | "query" | "monitor";
 type CodeGen = "csharp-class" | "csharp-record" | "ef-entity" | "ts-interface" | "json";
 
 const OBJECT_ICON = { table: Table2, view: Eye, procedure: FunctionSquare, function: FunctionSquare } as const;
@@ -476,7 +477,7 @@ export function DatabaseToolkit() {
 
               {/* Tabs */}
               <div className="flex gap-1 border-b border-border">
-                {(["query", "explorer"] as const).map((t) => (
+                {(["query", "explorer", "monitor"] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => { setTab(t); if (t === "explorer" && objects.length === 0) loadObjects(); }}
@@ -530,6 +531,8 @@ export function DatabaseToolkit() {
                     />
                   )}
                 </div>
+              ) : tab === "monitor" ? (
+                <DbMonitor engine={active.engine} runSql={runSql} />
               ) : (
                 <div className="flex flex-col gap-2">
                   <Textarea mono value={sql} onChange={(e) => { setSql(e.target.value); setConfirmRisk(false); }} className="min-h-32" placeholder="Write SQL…" />

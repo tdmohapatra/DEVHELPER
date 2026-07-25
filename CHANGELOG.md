@@ -46,6 +46,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plain chips — no new dependency. Plus **Copy Mermaid** to export the flow for docs.
   New tested `serviceEdges` / `toMermaidFlow` helpers.
 
+### Added — Database Toolkit: Monitoring panel
+- New **Monitor** tab: **active sessions** (who's connected — with a **Kill session**
+  control), **blocking & locks**, **last-modified objects**, and **database size**.
+  MSSQL DMVs (`dm_exec_sessions`/`dm_exec_requests`/`dm_tran_locks`, `sys.objects`,
+  `database_files`) with Postgres (`pg_stat_activity`, `pg_blocking_pids`) and MySQL
+  (`PROCESSLIST`, `data_lock_waits`) equivalents; "Not available" for SQLite. Kill uses
+  `KILL` / `pg_terminate_backend` with confirmation. New tested `dbMonitor` lib (+5 tests).
+
 ### Added — Database Toolkit: object Details panel
 - Clicking **Details** on any explorer object opens a tabbed panel: **Columns**
   (type/nullable/default/PK + CREATE), **Data** (paginated browser with Prev/Next, page
