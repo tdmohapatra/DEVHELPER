@@ -15,7 +15,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
     <button
       onClick={() => openTool(tool.id)}
       className={cn(
-        "group relative flex flex-col items-start gap-2 rounded-lg border border-border bg-card p-4 text-left transition-all hover:shadow-md",
+        "group relative flex flex-col items-start gap-2 rounded-lg border border-border bg-card p-4 text-left transition-all duration-150 ease-premium hover:-translate-y-0.5 hover:shadow-premium",
         color.hoverBorder,
       )}
     >

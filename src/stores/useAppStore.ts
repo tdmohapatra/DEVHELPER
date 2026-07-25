@@ -16,6 +16,7 @@ interface AppState {
   favorites: string[];
   recent: string[]; // most-recent first
   view: View;
+  sidebarCollapsed: boolean;
 
   toggleTheme: () => void;
   setTheme: (t: Theme) => void;
@@ -23,6 +24,7 @@ interface AppState {
   isFavorite: (toolId: string) => boolean;
   openTool: (toolId: string) => void;
   openView: (view: View) => void;
+  toggleSidebar: () => void;
 }
 
 const RECENT_LIMIT = 12;
@@ -58,6 +60,7 @@ export const useAppStore = create<AppState>()(
       favorites: [],
       recent: [],
       view: { kind: "dashboard" },
+      sidebarCollapsed: false,
 
       toggleTheme: () => {
         const next = get().theme === "dark" ? "light" : "dark";
@@ -85,10 +88,11 @@ export const useAppStore = create<AppState>()(
         writeHash(view);
         set({ view });
       },
+      toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
     }),
     {
       name: "devhelper-app",
-      partialize: (s) => ({ theme: s.theme, favorites: s.favorites, recent: s.recent }),
+      partialize: (s) => ({ theme: s.theme, favorites: s.favorites, recent: s.recent, sidebarCollapsed: s.sidebarCollapsed }),
       onRehydrateStorage: () => (state) => {
         // Apply persisted theme to the <html> element on load.
         if (state) document.documentElement.classList.toggle("dark", state.theme === "dark");

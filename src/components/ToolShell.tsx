@@ -22,10 +22,10 @@ export function ToolShell({ toolId, title, description, requiresNative, children
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
+      <header className="flex items-start justify-between gap-4 border-b border-border bg-background/70 px-6 py-4 backdrop-blur">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="truncate text-lg font-semibold">{title}</h1>
+            <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
             {requiresNative && <Badge variant="warning">Desktop only</Badge>}
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
@@ -36,9 +36,11 @@ export function ToolShell({ toolId, title, description, requiresNative, children
             variant="ghost"
             size="icon"
             title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            aria-pressed={isFavorite}
             onClick={() => toggleFavorite(toolId)}
           >
-            <Star className={cn(isFavorite && "fill-warning text-warning")} />
+            <Star className={cn("transition-colors", isFavorite && "fill-warning text-warning")} />
           </Button>
         </div>
       </header>

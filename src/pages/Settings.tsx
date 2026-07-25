@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
-import { Moon, Sun, Trash2, Bot } from "lucide-react";
+import { Moon, Sun, Trash2, Bot, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useAppStore } from "@/stores/useAppStore";
 import { useAiStore } from "@/stores/useAiStore";
+import { useSoundStore, playSound } from "@/lib/sound";
 import { isTauri } from "@/lib/platform";
 import { aiChat } from "@/lib/ai";
 import { toast } from "@/components/ui/toast";
@@ -14,6 +15,7 @@ export function Settings() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const ai = useAiStore();
+  const sound = useSoundStore();
   const [testing, setTesting] = useState(false);
 
   const testAi = async () => {
@@ -74,6 +76,22 @@ export function Settings() {
           <Button variant={theme === "light" ? "default" : "outline"} size="sm" onClick={() => setTheme("light")}>
             <Sun /> Light
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">{sound.enabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />} Sound</CardTitle>
+          <CardDescription>Subtle audio cues for success, error and other meaningful state changes. Off by default.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <Button size="sm" variant={sound.enabled ? "default" : "outline"} onClick={() => { const next = !sound.enabled; sound.set({ enabled: next }); if (next) playSound("success"); }}>
+            {sound.enabled ? "Enabled" : "Disabled"}
+          </Button>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Volume
+            <input type="range" min={0} max={1} step={0.05} value={sound.volume} disabled={!sound.enabled} onChange={(e) => sound.set({ volume: Number(e.target.value) })} onMouseUp={() => playSound("notification")} className="accent-primary" />
+          </label>
         </CardContent>
       </Card>
 

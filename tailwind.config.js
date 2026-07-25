@@ -38,6 +38,7 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        elevated: "hsl(var(--elevated))",
         success: {
           DEFAULT: "hsl(var(--success))",
           foreground: "hsl(var(--success-foreground))",
@@ -73,10 +74,21 @@ export default {
           from: { opacity: "0", transform: "translateY(4px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        "scale-in": {
+          from: { opacity: "0", transform: "scale(0.97)" },
+          to: { opacity: "1", transform: "scale(1)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.15s ease-out",
-        "slide-up": "slide-up 0.15s ease-out",
+        "slide-up": "slide-up 0.16s cubic-bezier(0.16, 1, 0.3, 1)",
+        "scale-in": "scale-in 0.14s cubic-bezier(0.16, 1, 0.3, 1)",
+      },
+      boxShadow: {
+        premium: "0 1px 2px hsl(0 0% 0% / 0.06), 0 8px 24px -12px hsl(0 0% 0% / 0.25)",
+      },
+      transitionTimingFunction: {
+        premium: "cubic-bezier(0.16, 1, 0.3, 1)",
       },
     },
   },

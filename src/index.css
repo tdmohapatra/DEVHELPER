@@ -4,54 +4,56 @@
 
 @layer base {
   :root {
-    /* Light theme */
+    /* Light theme — intentional, not an inversion. */
     --background: 0 0% 100%;
-    --foreground: 222 15% 12%;
+    --foreground: 224 20% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222 15% 12%;
-    --primary: 244 76% 59%;
+    --card-foreground: 224 20% 12%;
+    --elevated: 220 20% 98%;
+    --primary: 248 82% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 222 15% 20%;
-    --muted: 220 14% 96%;
+    --secondary: 220 16% 95%;
+    --secondary-foreground: 224 20% 20%;
+    --muted: 220 16% 95%;
     --muted-foreground: 220 9% 46%;
-    --accent: 244 76% 96%;
-    --accent-foreground: 244 76% 40%;
+    --accent: 248 82% 96%;
+    --accent-foreground: 248 70% 40%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --success: 142 71% 40%;
+    --success: 152 62% 40%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
+    --warning: 33 92% 48%;
     --warning-foreground: 0 0% 100%;
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 244 76% 59%;
+    --border: 220 15% 90%;
+    --input: 220 15% 88%;
+    --ring: 248 82% 60%;
     --radius: 0.625rem;
   }
 
   .dark {
-    /* Dark-first theme */
-    --background: 224 18% 8%;
-    --foreground: 220 14% 92%;
-    --card: 224 16% 11%;
-    --card-foreground: 220 14% 92%;
-    --primary: 245 80% 66%;
+    /* Dark-first — deep charcoal, elevated surfaces, subtle borders. */
+    --background: 226 26% 6%;
+    --foreground: 220 20% 94%;
+    --card: 225 20% 9%;
+    --card-foreground: 220 20% 94%;
+    --elevated: 225 17% 12%;
+    --primary: 250 86% 68%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 223 14% 16%;
-    --secondary-foreground: 220 14% 88%;
-    --muted: 223 14% 15%;
-    --muted-foreground: 220 9% 60%;
-    --accent: 245 40% 22%;
-    --accent-foreground: 245 80% 85%;
-    --destructive: 0 63% 50%;
+    --secondary: 225 15% 15%;
+    --secondary-foreground: 220 16% 90%;
+    --muted: 225 15% 14%;
+    --muted-foreground: 222 12% 60%;
+    --accent: 250 40% 20%;
+    --accent-foreground: 250 84% 86%;
+    --destructive: 0 66% 54%;
     --destructive-foreground: 0 0% 100%;
-    --success: 142 65% 45%;
+    --success: 152 58% 46%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 55%;
-    --warning-foreground: 224 18% 8%;
-    --border: 223 14% 18%;
-    --input: 223 14% 20%;
-    --ring: 245 80% 66%;
+    --warning: 36 92% 56%;
+    --warning-foreground: 226 26% 6%;
+    --border: 226 14% 16%;
+    --input: 226 13% 20%;
+    --ring: 250 86% 68%;
     --radius: 0.625rem;
   }
 
@@ -64,6 +66,11 @@
     font-feature-settings: "cv11", "ss01";
     text-rendering: optimizeLegibility;
     overflow: hidden;
+  }
+
+  /* Consistent, visible focus states for keyboard users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-1 ring-offset-background;
   }
 
   ::-webkit-scrollbar {
@@ -90,5 +97,51 @@
   }
   .mono {
     @apply font-mono text-[13px] leading-relaxed;
+  }
+
+  /* Very subtle developer grid — used sparingly (home, ambient surfaces). */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.4) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.4) 1px, transparent 1px);
+    background-size: 32px 32px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+  }
+
+  /* Ambient primary glow — importance/AI/live status only. */
+  .glow-primary {
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.15), 0 8px 40px -12px hsl(var(--primary) / 0.45);
+  }
+
+  /* Live pulse dot for connection/status indicators. */
+  .pulse-dot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    opacity: 0.6;
+    animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+}
+
+@keyframes ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+/* Accessibility: honour reduced-motion by neutralizing animation + transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -49,6 +49,13 @@ export default function App() {
     return () => window.removeEventListener("hashchange", apply);
   }, [openTool, openView]);
 
+  // Allow any component (e.g. the Home CTA) to open the palette via a DOM event.
+  useEffect(() => {
+    const open = () => setPaletteOpen(true);
+    window.addEventListener("devhelper:open-palette", open);
+    return () => window.removeEventListener("devhelper:open-palette", open);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Ctrl+K or Ctrl+Space → command palette.
@@ -71,6 +78,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [openTool]);
 
+  const view = useAppStore((s) => s.view);
+  const viewKey = view.kind === "tool" ? `tool:${view.toolId}` : view.kind;
+
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar />
@@ -84,7 +94,9 @@ export default function App() {
               </div>
             }
           >
-            <Content />
+            <div key={viewKey} className="h-full animate-fade-in">
+              <Content />
+            </div>
           </Suspense>
         </main>
       </div>

@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Changed — Premium UI/UX modernization (design system + shell)
+- Retuned the dark-first design tokens (deeper charcoal, elevated surface token, subtler
+  borders, crisper primary) and added a light theme that is intentionally designed, not
+  inverted. All ~46 tools inherit the new look via shared tokens — no per-tool rewrites.
+- **Motion system**: `scale-in` keyframe, premium easing token, button press
+  micro-interaction, keyed page fade, card hover lift; global **`prefers-reduced-motion`**
+  support. Consistent, GPU-friendly, no animation library added.
+- **Sidebar**: collapsible (icon-only + tooltips, persisted), active accent bar, smooth
+  width transition.
+- **Home**: reworked into a Command Centre — subtle grid hero, prominent palette CTA,
+  quick-jump chips, favorites/recent/quick sections.
+- **Header / ToolShell**: backdrop-blur sticky headers, refined focus-visible rings and
+  ARIA labels for accessibility.
+- **Sound manager** (`lib/sound.ts`): centralized Web-Audio synthesized cues (success /
+  error / notification), **off by default**, volume + toggle in Settings, persisted,
+  graceful-fail — never affects the app. Wired to success/error toasts.
+- No backend/logic/API changes; existing functionality preserved.
+
+
 ### Added — Cron Expression tool
 - New **Cron Expression** tool (quick): parse/validate 5- and 6-field cron expressions
   (`*`, ranges, `*/n` steps, lists, month/day names, Vixie DOM/DOW OR semantics), read them

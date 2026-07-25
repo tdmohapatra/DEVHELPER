@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { playSound } from "@/lib/sound";
 
 type ToastKind = "success" | "error" | "info";
 interface Toast {
@@ -21,6 +22,7 @@ const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
   push: (kind, message) => {
     const id = nextId++;
+    if (kind === "success" || kind === "error") playSound(kind);
     set((s) => ({ toasts: [...s.toasts, { id, kind, message }] }));
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
