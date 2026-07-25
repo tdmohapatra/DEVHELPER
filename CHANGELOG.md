@@ -5,6 +5,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Changed — Command palette: fuzzy ranking + restyle
+- New tested fuzzy matcher (`lib/fuzzy.ts`) — in-order subsequence scoring with prefix /
+  word-boundary / camelCase / contiguity bonuses; ranks e.g. "jf" → "JSON Formatter".
+- Command palette rebuilt on it: fuzzy-ranked tools with favorite/recent boosts,
+  **matched-character highlighting**, category-colored icons, global **command actions**
+  (dashboard / favorites / recent / settings / toggle theme / generate GUID), grouped
+  empty-state (recents + suggestions), active-row scroll-into-view, and a keyboard-hint
+  footer. +8 unit tests.
+
 ### Changed — Premium UI/UX modernization (design system + shell)
 - Retuned the dark-first design tokens (deeper charcoal, elevated surface token, subtler
   borders, crisper primary) and added a light theme that is intentionally designed, not
