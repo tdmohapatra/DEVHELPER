@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Sparkles, Copy, AlertTriangle, Settings as SettingsIcon } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
+import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
@@ -112,7 +113,7 @@ export function ContextPack() {
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-muted-foreground">Diagnosis</label>
           <div className="h-[calc(100vh-340px)] min-h-56 overflow-auto rounded-md border border-border bg-muted/20 p-3">
-            {error ? <p className="text-sm text-destructive">{error}</p> : output ? <pre className="whitespace-pre-wrap text-sm leading-relaxed">{output}</pre> : <p className="text-sm text-muted-foreground">Assemble context and click Analyze Everything.</p>}
+            {error ? <p className="text-sm text-destructive">{error}</p> : output ? <Markdown content={output} /> : <p className="text-sm text-muted-foreground">Assemble context and click Analyze Everything.</p>}
           </div>
         </div>
       </div>

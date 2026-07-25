@@ -4,6 +4,7 @@ import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/CopyButton";
+import { Markdown } from "@/components/Markdown";
 import { AddToDebug } from "@/components/AddToDebug";
 import { aiChat, aiDestinationLabel, AiNotConfiguredError, type ChatMessage } from "@/lib/ai";
 import { useAiStore } from "@/stores/useAiStore";
@@ -82,7 +83,7 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
             {error ? (
               <p className="text-sm text-destructive">{error}</p>
             ) : output ? (
-              <pre className="whitespace-pre-wrap text-sm leading-relaxed">{output}</pre>
+              <Markdown content={output} />
             ) : (
               <p className="text-sm text-muted-foreground">{loading ? "Waiting for the model…" : "Result appears here."}</p>
             )}

@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Changed — Formatted AI output (Markdown rendering)
+- AI results now render as **formatted Markdown** (headings, bold/italic, inline code,
+  fenced code blocks with copy, ordered/unordered lists, links) instead of raw text.
+  New dependency-free `lib/markdown.ts` parser (+7 tests) and `components/Markdown.tsx`.
+  Applied to Error Explainer / Code Explainer / API Failure Analyzer / Test Generator
+  (via AiPromptTool), Debug Session, Trace Explorer, Stack Trace Analyzer and Context Pack.
+
 ### Changed — Command palette: fuzzy ranking + restyle
 - New tested fuzzy matcher (`lib/fuzzy.ts`) — in-order subsequence scoring with prefix /
   word-boundary / camelCase / contiguity bonuses; ranks e.g. "jf" → "JSON Formatter".

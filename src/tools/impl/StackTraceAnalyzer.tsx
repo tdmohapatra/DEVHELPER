@@ -4,6 +4,7 @@ import { ToolShell } from "@/components/ToolShell";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { AddToDebug } from "@/components/AddToDebug";
+import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import { parseStackTrace, rootFrame } from "@/tools/lib/stacktrace";
 import { aiChat, AiNotConfiguredError } from "@/lib/ai";
@@ -115,7 +116,7 @@ export function StackTraceAnalyzer() {
             </Button>
             {!configured && <span className="ml-2 text-xs text-muted-foreground">Configure AI in Settings to enable.</span>}
             {aiErr && <p className="mt-1 text-xs text-destructive">{aiErr}</p>}
-            {aiOut && <pre className="mt-2 whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-3 text-sm">{aiOut}</pre>}
+            {aiOut && <div className="mt-2 rounded-md border border-border bg-muted/20 p-3"><Markdown content={aiOut} /></div>}
           </div>
         </div>
       </div>

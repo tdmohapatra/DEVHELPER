@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { Markdown } from "@/components/Markdown";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useDebugStore } from "@/stores/useDebugStore";
@@ -242,7 +243,7 @@ export function TraceExplorer() {
               {aiOut && (
                 <div className="relative rounded-md border border-primary/30 bg-primary/5 p-3">
                   <CopyButton value={aiOut} className="absolute right-2 top-2" />
-                  <pre className="whitespace-pre-wrap pr-16 text-sm">{aiOut}</pre>
+                  <Markdown content={aiOut} className="pr-16" />
                 </div>
               )}
 
