@@ -46,6 +46,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plain chips — no new dependency. Plus **Copy Mermaid** to export the flow for docs.
   New tested `serviceEdges` / `toMermaidFlow` helpers.
 
+### Added — Database Toolkit: object Details panel
+- Clicking **Details** on any explorer object opens a tabbed panel: **Columns**
+  (type/nullable/default/PK + CREATE), **Data** (paginated browser with Prev/Next, page
+  info, row count, all columns), **Indexes**, and **Definition** (view/procedure/function
+  source via `OBJECT_DEFINITION` / `SHOW CREATE` / `information_schema` / `sqlite_master`).
+  Per-engine SQL through the existing `db_query` — no new native code. New tested
+  `dbBrowse` lib (pageQuery / countQuery / definitionQuery / indexQuery, +7 tests).
+
 ### Added — Database Toolkit: paste connection string
 - Server connections can now be defined by pasting a raw, engine-native connection string
   (e.g. a full SQL Server ADO / SSMS string, or a Postgres/MySQL URL) instead of filling

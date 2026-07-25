@@ -39,8 +39,14 @@ Legend: ✅ done · 🔨 in progress · ⬜ todo · 🔒 blocked/needs infra
 - ⬜ **Query timeout** setting per run; **Max rows** preset chips (100 / 1k / 5k)
 
 ## Priority 2 — Needs native SQL per engine (medium)
-- 🔨 **Object DDL viewer** — columns, types, nullability, PK + "Script as CREATE" done; FK/indexes still todo
-- ⬜ **Table data browser** — paginated `SELECT *` (LIMIT/OFFSET, next/prev), row count, table size
+- ✅ **Object Details panel** — Columns (+CREATE), **Data browser** (paginated Prev/Next, all columns, row count), **Indexes**, **Definition** (view/proc/func source). FK still todo.
+- ✅ **Table data browser** — paginated `SELECT *` (next/prev), row count.
+
+## Priority 2b — DB monitoring & admin (next, mostly MSSQL first)
+- ⬜ **Monitoring panel**: active sessions / who's connected (`sys.dm_exec_sessions`+`requests` / `sp_who2`), **blocking & locks** (`sys.dm_tran_locks`), **last-modified objects** (`sys.objects.modify_date`), DB size.
+- ⬜ **Backup** — generate + run `BACKUP DATABASE … TO DISK` (confirm; safe).
+- ⬜ **Restore** — generate `RESTORE DATABASE …` script; **do not auto-run** (destructive) — show for review / require strong confirm.
+- ⚠️ **Recover deleted data** — NOT generally possible after the fact. Only via: a prior backup (restore + copy rows), **temporal/system-versioned tables** (`FOR SYSTEM_TIME`), or CDC/log tools. Provide guidance + temporal-history query helper, not a magic undelete.
 - ⬜ **EXPLAIN / query plan** button (EXPLAIN ANALYZE PG · SHOWPLAN/`SET STATISTICS` MSSQL · EXPLAIN MySQL)
 - ⬜ **Fix MSSQL rows-affected** — writes currently report 0 rows (use `execute` for non-SELECT)
 - ⬜ **Multi-statement batch** — run a script, show a result set per statement
