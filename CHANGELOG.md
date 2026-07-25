@@ -46,6 +46,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plain chips — no new dependency. Plus **Copy Mermaid** to export the flow for docs.
   New tested `serviceEdges` / `toMermaidFlow` helpers.
 
+### Added — Database Toolkit: paste connection string
+- Server connections can now be defined by pasting a raw, engine-native connection string
+  (e.g. a full SQL Server ADO / SSMS string, or a Postgres/MySQL URL) instead of filling
+  individual fields — passed straight to the driver. The raw string is **session-only,
+  never persisted** (may contain a password).
+
 ### Added — Config Inspector
 - New **Config Inspector** tool (devops): compare `appsettings.json` across N environments.
   Flattens nested config to `Section:Key` dotted keys, diffs them (changed / same / missing

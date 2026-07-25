@@ -58,6 +58,15 @@ type CodeGen = "csharp-class" | "csharp-record" | "ef-entity" | "ts-interface" |
 
 const OBJECT_ICON = { table: Table2, view: Eye, procedure: FunctionSquare, function: FunctionSquare } as const;
 
+/** Expected raw connection-string format per engine (shown as the paste placeholder/hint). */
+const RAW_HINT: Record<DbEngine, string> = {
+  mssql: "Server=tcp:HOST,1433;Database=DB;Integrated Security=True;TrustServerCertificate=True",
+  postgres: "postgresql://user:pass@host:5432/dbname",
+  mysql: "mysql://user:pass@host:3306/dbname",
+  oracle: "user/password@//host:1521/service",
+  sqlite: "C:\\path\\to\\app.db",
+};
+
 interface DetectProbe { engine: DbEngine; port: number; proc: string }
 type DetectRow = DetectProbe & { open: boolean; running: boolean };
 
@@ -154,7 +163,7 @@ export function DatabaseToolkit() {
 
   const engineReady = (e: DbEngine) => DB_ENGINES.find((x) => x.id === e)?.ready ?? false;
   const needsPassword =
-    !!active && active.engine !== "sqlite" && !active.integratedSecurity && !passwords[active.id];
+    !!active && active.engine !== "sqlite" && !active.integratedSecurity && !active.usesRawConnString && !passwords[active.id];
 
   const connString = () => (active ? buildConnString(active, passwords[active.id] ?? "") : "");
 
@@ -661,38 +670,55 @@ function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; 
           </Field>
         ) : (
           <>
-            <div className="grid grid-cols-[1fr_120px] gap-2">
-              <Field label="Host"><Input value={c.host ?? ""} onChange={(e) => patch({ host: e.target.value })} placeholder="localhost" /></Field>
-              <Field label="Port"><Input type="number" value={c.port ?? 0} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
-            </div>
-            {c.engine === "mssql" && (
-              <Hint>
-                Local default port is <b>1433</b>. A named instance like <b>SQLEXPRESS</b> uses a dynamic port —
-                find it in SQL Server Configuration Manager → Protocols → TCP/IP → IP Addresses → TCP Dynamic Ports,
-                and enter that port here. Make sure TCP/IP is <b>enabled</b> for the instance.
-              </Hint>
-            )}
-            <Field label="Database"><Input value={c.database ?? ""} onChange={(e) => patch({ database: e.target.value })} placeholder={c.engine === "mssql" ? "master" : ""} /></Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={!!c.usesRawConnString} onChange={(e) => patch({ usesRawConnString: e.target.checked })} />
+              Paste a connection string (advanced)
+            </label>
 
-            {c.engine === "mssql" && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!!c.integratedSecurity} onChange={(e) => patch({ integratedSecurity: e.target.checked })} />
-                Windows authentication (integrated security)
-              </label>
-            )}
-
-            {!(c.engine === "mssql" && c.integratedSecurity) && (
-              <Field label="User">
-                <Input value={c.user ?? ""} onChange={(e) => patch({ user: e.target.value })} placeholder={c.engine === "mssql" ? "sa" : ""} />
-                {c.engine === "mssql" && <Hint>SQL login. Requires the server to allow <b>SQL Server &amp; Windows Authentication mode</b> (mixed mode). If only Windows auth is enabled, tick the box above instead.</Hint>}
+            {c.usesRawConnString ? (
+              <Field label="Connection string">
+                <Textarea mono value={c.rawConnString ?? ""} onChange={(e) => patch({ rawConnString: e.target.value })} className="min-h-24" placeholder={RAW_HINT[c.engine]} />
+                <Hint>
+                  Passed straight to the driver — expected format: <span className="mono">{RAW_HINT[c.engine]}</span>.
+                  Not saved to disk (may contain a password); re-paste it each session.
+                </Hint>
               </Field>
-            )}
+            ) : (
+              <>
+                <div className="grid grid-cols-[1fr_120px] gap-2">
+                  <Field label="Host"><Input value={c.host ?? ""} onChange={(e) => patch({ host: e.target.value })} placeholder="localhost" /></Field>
+                  <Field label="Port"><Input type="number" value={c.port ?? 0} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
+                </div>
+                {c.engine === "mssql" && (
+                  <Hint>
+                    Local default port is <b>1433</b>. A named instance like <b>SQLEXPRESS</b> uses a dynamic port —
+                    find it in SQL Server Configuration Manager → Protocols → TCP/IP → IP Addresses → TCP Dynamic Ports,
+                    and enter that port here. Make sure TCP/IP is <b>enabled</b> for the instance.
+                  </Hint>
+                )}
+                <Field label="Database"><Input value={c.database ?? ""} onChange={(e) => patch({ database: e.target.value })} placeholder={c.engine === "mssql" ? "master" : ""} /></Field>
 
-            {c.engine === "mssql" && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={c.trustServerCertificate !== false} onChange={(e) => patch({ trustServerCertificate: e.target.checked })} />
-                Trust server certificate (needed for local/self-signed)
-              </label>
+                {c.engine === "mssql" && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={!!c.integratedSecurity} onChange={(e) => patch({ integratedSecurity: e.target.checked })} />
+                    Windows authentication (integrated security)
+                  </label>
+                )}
+
+                {!(c.engine === "mssql" && c.integratedSecurity) && (
+                  <Field label="User">
+                    <Input value={c.user ?? ""} onChange={(e) => patch({ user: e.target.value })} placeholder={c.engine === "mssql" ? "sa" : ""} />
+                    {c.engine === "mssql" && <Hint>SQL login. Requires the server to allow <b>SQL Server &amp; Windows Authentication mode</b> (mixed mode). If only Windows auth is enabled, tick the box above instead.</Hint>}
+                  </Field>
+                )}
+
+                {c.engine === "mssql" && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={c.trustServerCertificate !== false} onChange={(e) => patch({ trustServerCertificate: e.target.checked })} />
+                    Trust server certificate (needed for local/self-signed)
+                  </label>
+                )}
+              </>
             )}
           </>
         )}

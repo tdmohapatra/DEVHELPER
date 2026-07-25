@@ -84,8 +84,12 @@ export const useDbStore = create<DbState>()(
     }),
     {
       name: "devhelper-db",
-      // Persist connection metadata + query history. Passwords and active selection stay in memory.
-      partialize: (s) => ({ connections: s.connections, history: s.history }),
+      // Persist connection metadata + query history. Passwords, the raw connection string
+      // (may contain a password), and the active selection stay in memory only.
+      partialize: (s) => ({
+        connections: s.connections.map(({ rawConnString: _raw, ...c }) => c),
+        history: s.history,
+      }),
     },
   ),
 );

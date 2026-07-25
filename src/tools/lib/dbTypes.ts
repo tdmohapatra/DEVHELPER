@@ -27,6 +27,10 @@ export interface DbConnection {
   integratedSecurity?: boolean;
   /** SQL Server: trust a self-signed server certificate (default true for local dev) */
   trustServerCertificate?: boolean;
+  /** Bypass the individual fields and use a raw, engine-native connection string. */
+  usesRawConnString?: boolean;
+  /** The raw connection string — session-only, never persisted (may contain a password). */
+  rawConnString?: string;
   /** optional environment tag (LOCAL/DEV/QA/UAT/PROD) for grouping + prod warnings */
   environment?: string;
   isProduction?: boolean;
@@ -58,6 +62,8 @@ export const DEFAULT_PORTS: Partial<Record<DbEngine, number>> = {
 
 /** Build the engine-specific connection string passed to the native layer. */
 export function buildConnString(conn: DbConnection, password: string): string {
+  // Raw mode: pass the user's connection string straight through.
+  if (conn.usesRawConnString && conn.rawConnString && conn.rawConnString.trim()) return conn.rawConnString.trim();
   if (conn.engine === "sqlite") return conn.filePath ?? "";
   const host = conn.host || "localhost";
   const port = conn.port || DEFAULT_PORTS[conn.engine] || 0;
