@@ -46,11 +46,24 @@ export interface ApiFolder {
   requestIds: string[];
 }
 
+/** A typed service the environment points at (metadata only — no secrets stored here). */
+export type EnvConnKind = "database" | "api" | "redis" | "nats" | "rabbitmq" | "mqtt" | "websocket";
+
+export interface EnvConnection {
+  id: string;
+  kind: EnvConnKind;
+  name: string;
+  /** Per-kind target fields, e.g. { host, port, database } or { baseUrl } or { url }. */
+  fields: Record<string, string>;
+}
+
 export interface Environment {
   id: string;
   name: string;
   isProduction: boolean;
   variables: KeyValue[];
+  /** Optional typed connection references (Environment Manager 2.0). Backward compatible. */
+  connections?: EnvConnection[];
 }
 
 export function emptyRequest(id: string): ApiRequest {

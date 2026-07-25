@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Environment Manager 2.0
+- Environments now hold **typed connection references** (database / API / Redis / NATS /
+  RabbitMQ / MQTT / WebSocket) alongside variables — metadata only, no secrets stored.
+  Backward compatible (`connections` is optional; API Tester variable flow unchanged).
+- **Environment Compare** — diff two environments' variables and connections
+  (added / removed / changed / same) with counts, "hide identical", and **secret masking**
+  (auto-detected sensitive keys, reveal toggle). New `envCompare` lib (+6 unit tests).
+
 ### Added — Trace Explorer
 - New **Trace Explorer** tool (diagnostics): enter a correlation / trace / request id and
   reconstruct its path across every captured Debug Session event (plus optional pasted

@@ -20,6 +20,22 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 
 ---
 
+## 2026-07-26 — Environment Manager 2.0 (increment 1)
+
+- [x] `Environment` extended with optional typed `connections` (database/api/redis/nats/
+      rabbitmq/mqtt/websocket) — metadata only, backward compatible; API Tester unchanged.
+- [x] Environments tool rebuilt: Edit mode (variables + per-kind connection editor) and
+      **Compare** mode — variable + connection diff (added/removed/changed/same), counts,
+      hide-identical, secret masking with reveal toggle.
+- [x] `envCompare.ts` pure logic (`diffVariables`/`diffConnections`/`countStates`/
+      `isSecretKey`/`maskValue`) + 6 unit tests. 125 JS tests. Typecheck + build clean.
+
+### Next increment
+- [ ] Cross-tool consumption: DB Toolkit / API Tester "use this environment's connection"
+      (one-click connect from the active env's typed refs).
+
+---
+
 ## 2026-07-26 — Debug Session (flagship, increment 1)
 
 First slice of the flagship "debug a distributed flow" capability. Pure frontend, additive,
