@@ -260,6 +260,37 @@ function worstStatus(a: DebugStatus, b: DebugStatus): DebugStatus {
   return STATUS_RANK[b] > STATUS_RANK[a] ? b : a;
 }
 
+export interface ServiceEdge {
+  from: string;
+  to: string;
+  /** gap in ms between the previous service's last event and the next service's first event */
+  ms: number;
+}
+
+/** Edges between consecutive service hops, labelled with the inter-service latency. */
+export function serviceEdges(hops: ServiceHop[]): ServiceEdge[] {
+  const edges: ServiceEdge[] = [];
+  for (let i = 0; i < hops.length - 1; i++) {
+    edges.push({ from: hops[i].service, to: hops[i + 1].service, ms: Math.max(0, hops[i + 1].firstAt - hops[i].lastAt) });
+  }
+  return edges;
+}
+
+/** Render the service flow as a Mermaid left-to-right flowchart (for docs/tickets). */
+export function toMermaidFlow(hops: ServiceHop[]): string {
+  if (hops.length === 0) return "flowchart LR\n  empty[No events]";
+  const id = (i: number) => `n${i}`;
+  const esc = (s: string) => s.replace(/"/g, "'");
+  const lines = ["flowchart LR"];
+  hops.forEach((h, i) => lines.push(`  ${id(i)}["${esc(h.service)}"]:::${h.status}`));
+  const edges = serviceEdges(hops);
+  edges.forEach((e, i) => lines.push(`  ${id(i)} -->|${e.ms}ms| ${id(i + 1)}`));
+  lines.push("  classDef error fill:#fee,stroke:#c00;");
+  lines.push("  classDef warn fill:#ff7,stroke:#a60;");
+  lines.push("  classDef ok fill:#efe,stroke:#0a0;");
+  return lines.join("\n");
+}
+
 export interface TraceSummary {
   count: number;
   errors: number;

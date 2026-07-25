@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Trace Explorer service-flow diagram
+- Trace Explorer now renders the reconstructed path as an **SVG service-flow diagram**
+  (nodes colored by worst status, edges labelled with inter-service latency) instead of
+  plain chips — no new dependency. Plus **Copy Mermaid** to export the flow for docs.
+  New tested `serviceEdges` / `toMermaidFlow` helpers.
+
 ### Added — Config Inspector
 - New **Config Inspector** tool (devops): compare `appsettings.json` across N environments.
   Flattens nested config to `Section:Key` dotted keys, diffs them (changed / same / missing

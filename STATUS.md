@@ -76,8 +76,10 @@ works in browser + desktop.
 - [x] Pure logic `eventMatchesId` / `serviceFlow` / `traceSummary` (+3 tests). 119 JS tests.
 
 ### Next increments
-- [ ] Visual service-flow diagram (mermaid) from the timeline.
-- [ ] Capture from messaging tools (Redis/NATS/RabbitMQ) + Error Explainer / Stack Trace.
+- [x] Visual service-flow diagram — Trace Explorer renders an SVG flow (status-colored nodes,
+      latency-labelled edges) + Copy Mermaid export. `serviceEdges`/`toMermaidFlow` (+2 tests).
+- [x] Capture from Error Explainer / Stack Trace Analyzer (done earlier).
+- [ ] Capture from messaging tools (Redis/NATS/RabbitMQ).
 
 ---
 

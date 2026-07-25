@@ -8,6 +8,8 @@ import {
   correlationIds,
   eventMatchesId,
   serviceFlow,
+  serviceEdges,
+  toMermaidFlow,
   traceSummary,
   toMarkdown,
   buildAiContext,
@@ -144,6 +146,22 @@ describe("traceSummary", () => {
     expect(s.errors).toBe(1);
     expect(s.durationMs).toBe(200); // 300 - 100
     expect(s.failurePoint?.id).toBe("c");
+  });
+});
+
+describe("serviceEdges / toMermaidFlow", () => {
+  const hops = serviceFlow(flow.filter((e) => e.correlationId === "ord-9"));
+  it("builds edges with inter-service latency", () => {
+    const edges = serviceEdges(hops);
+    expect(edges.map((e) => `${e.from}->${e.to}`)).toEqual(["OrderApi->OrderSvc", "OrderSvc->PaymentSvc"]);
+    expect(edges[0].ms).toBe(100); // OrderSvc firstAt 200 - OrderApi lastAt 100
+  });
+  it("emits a mermaid flowchart with nodes, edges and the failing class", () => {
+    const m = toMermaidFlow(hops);
+    expect(m.startsWith("flowchart LR")).toBe(true);
+    expect(m).toContain('n0["OrderApi"]:::ok');
+    expect(m).toContain('n2["PaymentSvc"]:::error');
+    expect(m).toContain("-->|100ms|");
   });
 });
 

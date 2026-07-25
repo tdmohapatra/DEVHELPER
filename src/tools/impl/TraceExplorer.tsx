@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, Sparkles, ArrowRight, TriangleAlert, ClipboardPaste, FolderPlus, Clock } from "lucide-react";
+import { Search, Sparkles, TriangleAlert, ClipboardPaste, FolderPlus, Clock } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +15,8 @@ import {
   sortEvents,
   eventMatchesId,
   serviceFlow,
+  serviceEdges,
+  toMermaidFlow,
   traceSummary,
   parseLogEntries,
   buildAiContext,
@@ -22,6 +24,7 @@ import {
   formatEventTime,
   type DebugEvent,
   type DebugStatus,
+  type ServiceHop,
 } from "@/tools/lib/debugSession";
 
 const STATUS_DOT: Record<DebugStatus, string> = {
@@ -31,13 +34,59 @@ const STATUS_DOT: Record<DebugStatus, string> = {
   info: "bg-muted-foreground/50",
   pending: "bg-muted-foreground/30",
 };
-const HOP_STYLE: Record<DebugStatus, string> = {
-  ok: "border-success/40 bg-success/10 text-success",
-  error: "border-destructive/40 bg-destructive/10 text-destructive",
-  warn: "border-warning/40 bg-warning/10 text-warning",
-  info: "border-border bg-secondary text-foreground",
-  pending: "border-border bg-secondary text-muted-foreground",
+const NODE_STYLE: Record<DebugStatus, { rect: string; text: string }> = {
+  ok: { rect: "fill-success/10 stroke-success", text: "fill-success" },
+  error: { rect: "fill-destructive/10 stroke-destructive", text: "fill-destructive" },
+  warn: { rect: "fill-warning/10 stroke-warning", text: "fill-warning" },
+  info: { rect: "fill-secondary stroke-border", text: "fill-foreground" },
+  pending: { rect: "fill-secondary stroke-border", text: "fill-muted-foreground" },
 };
+
+function ServiceFlowSvg({ hops }: { hops: ServiceHop[] }) {
+  const GAP = 64, PAD = 8, NY = 18, NH = 38;
+  let x = PAD;
+  const nodes = hops.map((h) => {
+    const w = Math.max(90, h.service.length * 7.2 + 30);
+    const n = { ...h, x, w };
+    x += w + GAP;
+    return n;
+  });
+  const width = Math.max(x - GAP + PAD, 120);
+  const edges = serviceEdges(hops);
+  const midY = NY + NH / 2;
+
+  return (
+    <div className="overflow-x-auto">
+      <svg width={width} height={NY + NH + 14} className="text-muted-foreground">
+        <defs>
+          <marker id="tf-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" className="fill-muted-foreground" />
+          </marker>
+        </defs>
+        {edges.map((e, i) => {
+          const a = nodes[i], b = nodes[i + 1];
+          const x1 = a.x + a.w, x2 = b.x;
+          return (
+            <g key={i}>
+              <line x1={x1} y1={midY} x2={x2 - 2} y2={midY} className="stroke-muted-foreground" strokeWidth={1.5} markerEnd="url(#tf-arrow)" />
+              <text x={(x1 + x2) / 2} y={midY - 5} textAnchor="middle" className="fill-muted-foreground text-[10px]">{e.ms}ms</text>
+            </g>
+          );
+        })}
+        {nodes.map((n) => {
+          const st = NODE_STYLE[n.status];
+          return (
+            <g key={n.service}>
+              <rect x={n.x} y={NY} width={n.w} height={NH} rx={6} className={cn(st.rect)} strokeWidth={1.5} />
+              <text x={n.x + n.w / 2} y={NY + 17} textAnchor="middle" className={cn("text-[12px] font-medium", st.text)}>{n.service}</text>
+              <text x={n.x + n.w / 2} y={NY + 30} textAnchor="middle" className="fill-muted-foreground text-[9px]">{n.count} event{n.count === 1 ? "" : "s"}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 let SYNTH = 0;
 const synthId = () => `trace-${++SYNTH}`;
@@ -179,18 +228,14 @@ export function TraceExplorer() {
                 </div>
               </div>
 
-              {/* Service flow */}
+              {/* Service flow diagram */}
               {hops.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1">
-                  {hops.map((h, i) => (
-                    <div key={h.service} className="flex items-center gap-1">
-                      <div className={cn("rounded-md border px-2 py-1 text-xs", HOP_STYLE[h.status])} title={`${h.count} event(s)`}>
-                        {h.service}
-                        {h.count > 1 && <span className="ml-1 opacity-70">×{h.count}</span>}
-                      </div>
-                      {i < hops.length - 1 && <ArrowRight className="size-3.5 text-muted-foreground" />}
-                    </div>
-                  ))}
+                <div className="rounded-md border border-border p-2">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">Service flow</span>
+                    <CopyButton className="ml-auto" label="Mermaid" variant="ghost" value={toMermaidFlow(hops)} />
+                  </div>
+                  <ServiceFlowSvg hops={hops} />
                 </div>
               )}
 
