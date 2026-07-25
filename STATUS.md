@@ -20,6 +20,16 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 
 ---
 
+## 2026-07-26 — Config Inspector
+
+- [x] New tool (devops): compare appsettings.json across N environments. `configInspect.ts`
+      flattens nested config to `Section:Key`, diffs (changed/same/partial), reuses
+      `isSecretKey`/`maskValue` for secret masking. UI: N config panes (paste or load .json),
+      diff table with reveal-secrets + differences-only + filter + diff copy. Local only.
+- [x] `configInspect` pure lib + 8 unit tests. 145 JS tests. Typecheck + build clean.
+
+---
+
 ## 2026-07-26 — Environment Manager 2.0 (increment 1)
 
 - [x] `Environment` extended with optional typed `connections` (database/api/redis/nats/

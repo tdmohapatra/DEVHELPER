@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Config Inspector
+- New **Config Inspector** tool (devops): compare `appsettings.json` across N environments.
+  Flattens nested config to `Section:Key` dotted keys, diffs them (changed / same / missing
+  in some), masks likely-secret values (passwords, keys, tokens, connection strings) with a
+  reveal toggle, "differences only" filter, per-config file load, and diff copy. Pure-TS,
+  local-only. New `configInspect` lib (+8 unit tests).
+
 ### Added — Object DDL viewer
 - Database Toolkit explorer: a **DDL** button on tables/views shows their columns
   (type / nullable / default / **primary key**) and a generated **CREATE TABLE** (copyable).

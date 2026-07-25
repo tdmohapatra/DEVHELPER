@@ -42,6 +42,7 @@ import {
   Database as DatabaseIcon,
   Bug as BugIcon,
   Route as RouteIcon,
+  FileCog,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -483,6 +484,16 @@ export const TOOLS: Tool[] = [
     keywords: ["trace", "correlation", "request id", "explorer", "distributed", "span", "flow", "root cause", "opentelemetry", "otel"],
     route: "/tools/trace-explorer",
     component: L(() => import("./impl/TraceExplorer"), "TraceExplorer"),
+  },
+  {
+    id: "config-inspector",
+    name: "Config Inspector",
+    description: "Compare appsettings.json across environments — added/removed/changed keys with automatic secret masking",
+    category: "devops",
+    icon: FileCog,
+    keywords: ["config", "appsettings", "configuration", "dotnet", ".net", "environment", "compare", "diff", "secrets", "json"],
+    route: "/tools/config-inspector",
+    component: L(() => import("./impl/ConfigInspector"), "ConfigInspector"),
   },
 ];
 
