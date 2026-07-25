@@ -478,6 +478,19 @@ mod tests {
     }
 
     #[test]
+    fn mssql_ado_string_parses() {
+        // The user's exact SSMS connection string — verify tiberius accepts it (unknown
+        // keys ignored) and resolves host + default port 1433.
+        use tiberius::Config;
+        let s = "Data Source=DESKTOP-MHPFCI3;Integrated Security=True;Persist Security Info=False;Pooling=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Application Name=\"SQL Server Management Studio\";Command Timeout=0";
+        let mut config = Config::from_ado_string(s).expect("ADO string should parse");
+        config.trust_cert();
+        let addr = config.get_addr();
+        assert!(addr.contains("DESKTOP-MHPFCI3"), "addr was {addr}");
+        assert!(addr.contains("1433"), "addr was {addr}");
+    }
+
+    #[test]
     fn sqlite_respects_max_rows_and_marks_truncated() {
         let path = temp_db();
         sqlite_query(&path, "CREATE TABLE n (x INTEGER)", 100).unwrap();
