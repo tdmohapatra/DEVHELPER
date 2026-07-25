@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Object DDL viewer
+- Database Toolkit explorer: a **DDL** button on tables/views shows their columns
+  (type / nullable / default / **primary key**) and a generated **CREATE TABLE** (copyable).
+  Metadata is fetched per engine (SQLite `PRAGMA`, MySQL `SHOW COLUMNS`, Postgres/SQL Server
+  `information_schema` + PK query) — no new native code. New tested `dbSchema` lib (+6 tests).
+
 ### Added — DB Toolkit quick-wins + more Debug capture
 - **Database Toolkit**: per-connection **query history** (persisted, re-run from a dropdown),
   results grid **sort by column** + **filter box**, **row detail panel** (vertical

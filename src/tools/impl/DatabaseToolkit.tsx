@@ -42,6 +42,7 @@ import {
   type QueryResult,
 } from "@/tools/lib/dbTypes";
 import { analyzeSql, isWriteSql, highestRisk } from "@/tools/lib/sqlSafety";
+import { columnsQuery, pkQuery, normalizeColumns, buildCreateTable, type ColumnMeta } from "@/tools/lib/dbSchema";
 import {
   inferColumns,
   toCsharpClass,
@@ -114,6 +115,8 @@ export function DatabaseToolkit() {
   const [status, setStatus] = useState<Record<string, ConnStatus>>({});
   const [databases, setDatabases] = useState<string[]>([]);
   const [loadingDbs, setLoadingDbs] = useState(false);
+  const [ddl, setDdl] = useState<{ obj: DbObject; columns: ColumnMeta[] } | null>(null);
+  const [ddlBusy, setDdlBusy] = useState<string | null>(null);
 
   const activeStatus: ConnStatus = (active && status[active.id]) || { state: "unknown" };
   const mark = (id: string, s: ConnStatus) => setStatus((cur) => ({ ...cur, [id]: s }));
@@ -262,6 +265,28 @@ export function DatabaseToolkit() {
     const qualified = obj.schema ? `${obj.schema}.${obj.name}` : obj.name;
     setSql(`SELECT * FROM ${qualified} LIMIT 100;`);
     setTab("query");
+  }
+
+  async function showDdl(obj: DbObject) {
+    if (!active || !isTauri()) return;
+    const key = `${obj.schema}.${obj.name}`;
+    setDdlBusy(key);
+    setError("");
+    try {
+      const colsSql = columnsQuery(active.engine, obj.schema, obj.name);
+      if (!colsSql) { setError(`Column inspection is not supported for ${active.engine}.`); return; }
+      const colsResult = await invokeNative<QueryResult>("db_query", { engine: active.engine, connStr: connString(), sql: colsSql, maxRows: 500 });
+      let pkResult: QueryResult | undefined;
+      const pkSql = pkQuery(active.engine, obj.schema, obj.name);
+      if (pkSql) {
+        try { pkResult = await invokeNative<QueryResult>("db_query", { engine: active.engine, connStr: connString(), sql: pkSql, maxRows: 100 }); } catch { /* PK best-effort */ }
+      }
+      setDdl({ obj, columns: normalizeColumns(active.engine, colsResult, pkResult) });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDdlBusy(null);
+    }
   }
 
   const filteredObjects = objects.filter((o) => o.name.toLowerCase().includes(objFilter.toLowerCase()));
@@ -487,12 +512,21 @@ export function DatabaseToolkit() {
                             <Icon className="size-4 text-muted-foreground" />
                             <span className="text-sm">{o.schema ? `${o.schema}.` : ""}{o.name}</span>
                             <Badge variant="outline" className="ml-1 text-[10px]">{o.kind}</Badge>
-                            <Button size="sm" variant="ghost" className="ml-auto" onClick={() => selectFrom(o)}>SELECT</Button>
+                            <div className="ml-auto flex gap-1">
+                              {(o.kind === "table" || o.kind === "view") && (
+                                <Button size="sm" variant="ghost" disabled={ddlBusy !== null} onClick={() => showDdl(o)}>
+                                  {ddlBusy === `${o.schema}.${o.name}` ? "…" : "DDL"}
+                                </Button>
+                              )}
+                              <Button size="sm" variant="ghost" onClick={() => selectFrom(o)}>SELECT</Button>
+                            </div>
                           </div>
                         );
                       })
                     )}
                   </div>
+
+                  {ddl && <DdlPanel data={ddl} onClose={() => setDdl(null)} onSelect={() => selectFrom(ddl.obj)} />}
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
@@ -828,6 +862,46 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function DdlPanel({ data, onClose, onSelect }: { data: { obj: DbObject; columns: ColumnMeta[] }; onClose: () => void; onSelect: () => void }) {
+  const qualified = data.obj.schema ? `${data.obj.schema}.${data.obj.name}` : data.obj.name;
+  const create = buildCreateTable(qualified, data.columns);
+  return (
+    <div className="rounded-md border border-border">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <Table2 className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">{qualified}</span>
+        <Badge variant="outline" className="text-[10px]">{data.columns.length} columns</Badge>
+        <div className="ml-auto flex gap-1">
+          <CopyButton value={create} label="CREATE" />
+          <Button size="sm" variant="ghost" onClick={onSelect}>SELECT</Button>
+          <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+      <div className="max-h-64 overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border text-left text-xs text-muted-foreground">
+            <tr><th className="px-3 py-1.5">Column</th><th className="px-3 py-1.5">Type</th><th className="px-3 py-1.5">Null</th><th className="px-3 py-1.5">Default</th><th className="px-3 py-1.5">Key</th></tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {data.columns.map((c) => (
+              <tr key={c.name}>
+                <td className="mono px-3 py-1">{c.name}</td>
+                <td className="mono px-3 py-1 text-muted-foreground">{c.type}</td>
+                <td className="px-3 py-1 text-xs">{c.nullable ? "YES" : "NO"}</td>
+                <td className="mono px-3 py-1 text-xs text-muted-foreground">{c.default ?? ""}</td>
+                <td className="px-3 py-1">{c.pk && <Badge variant="default" className="text-[10px]">PK</Badge>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="border-t border-border p-3">
+        <pre className="mono max-h-48 overflow-auto whitespace-pre text-xs">{create}</pre>
+      </div>
     </div>
   );
 }

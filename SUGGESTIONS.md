@@ -39,7 +39,7 @@ Legend: ✅ done · 🔨 in progress · ⬜ todo · 🔒 blocked/needs infra
 - ⬜ **Query timeout** setting per run; **Max rows** preset chips (100 / 1k / 5k)
 
 ## Priority 2 — Needs native SQL per engine (medium)
-- ⬜ **Object DDL viewer** — columns, types, nullability, PK/FK, indexes; "Script as CREATE"
+- 🔨 **Object DDL viewer** — columns, types, nullability, PK + "Script as CREATE" done; FK/indexes still todo
 - ⬜ **Table data browser** — paginated `SELECT *` (LIMIT/OFFSET, next/prev), row count, table size
 - ⬜ **EXPLAIN / query plan** button (EXPLAIN ANALYZE PG · SHOWPLAN/`SET STATISTICS` MSSQL · EXPLAIN MySQL)
 - ⬜ **Fix MSSQL rows-affected** — writes currently report 0 rows (use `execute` for non-SELECT)
