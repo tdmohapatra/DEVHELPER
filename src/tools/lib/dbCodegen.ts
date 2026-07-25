@@ -127,6 +127,21 @@ export function toTsInterface(cols: ColumnInfo[], name = "Row"): string {
   return `export interface ${pascal(name)} {\n${lines.join("\n")}\n}`;
 }
 
+/** Quote a text cell value for a SQL literal: NULL, bare number/bool, or escaped string. */
+export function sqlLiteral(v: string | null): string {
+  if (v === null) return "NULL";
+  if (/^-?\d+(\.\d+)?$/.test(v)) return v;
+  if (/^(true|false)$/i.test(v)) return v.toUpperCase();
+  return `'${v.replace(/'/g, "''")}'`;
+}
+
+/** Build an INSERT statement from a result row. */
+export function toInsert(columns: string[], row: (string | null)[], table = "table_name"): string {
+  const cols = columns.join(", ");
+  const vals = columns.map((_, i) => sqlLiteral(row[i] ?? null)).join(", ");
+  return `INSERT INTO ${table} (${cols}) VALUES (${vals});`;
+}
+
 /** A single-row JSON example built from the first data row (or nulls). */
 export function toJsonExample(result: QueryResult, cols: ColumnInfo[]): string {
   const row = result.rows[0];

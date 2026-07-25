@@ -4,9 +4,11 @@ import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { aiChat, aiDestinationLabel, AiNotConfiguredError, type ChatMessage } from "@/lib/ai";
 import { useAiStore } from "@/stores/useAiStore";
 import { useAppStore } from "@/stores/useAppStore";
+import type { ParsedEvent } from "@/tools/lib/debugSession";
 
 interface Props {
   toolId: string;
@@ -17,10 +19,12 @@ interface Props {
   systemPrompt: string;
   buildUserPrompt: (input: string) => string;
   sample?: string;
+  /** When set, shows an "Add to Debug Session" button that captures the current input. */
+  capture?: (input: string, output: string) => ParsedEvent;
 }
 
 /** Shared scaffold for "paste input → AI analyses it → markdown-ish output" tools. */
-export function AiPromptTool({ toolId, title, description, inputLabel, placeholder, systemPrompt, buildUserPrompt, sample }: Props) {
+export function AiPromptTool({ toolId, title, description, inputLabel, placeholder, systemPrompt, buildUserPrompt, sample, capture }: Props) {
   const [input, setInput] = useState(sample ?? "");
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -65,9 +69,12 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-muted-foreground">{inputLabel}</label>
           <Textarea mono className="h-[calc(100vh-380px)] min-h-56" value={input} onChange={(e) => setInput(e.target.value)} placeholder={placeholder} />
-          <Button className="mt-1 self-start" disabled={loading || !configured || !input.trim()} onClick={run}>
-            <Sparkles /> {loading ? "Analyzing…" : "Analyze"}
-          </Button>
+          <div className="mt-1 flex items-center gap-2">
+            <Button disabled={loading || !configured || !input.trim()} onClick={run}>
+              <Sparkles /> {loading ? "Analyzing…" : "Analyze"}
+            </Button>
+            {capture && input.trim() && <AddToDebug makeEvent={() => capture(input, output)} label="Add to Debug" variant="ghost" />}
+          </div>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-muted-foreground">Result</label>

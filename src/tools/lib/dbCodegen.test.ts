@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { inferColumns, toCsharpClass, toCsharpRecord, toEfEntity, toTsInterface, toJsonExample } from "./dbCodegen";
+import { inferColumns, toCsharpClass, toCsharpRecord, toEfEntity, toTsInterface, toJsonExample, sqlLiteral, toInsert } from "./dbCodegen";
 import type { QueryResult } from "./dbTypes";
 
 const result: QueryResult = {
@@ -60,5 +60,19 @@ describe("code generators", () => {
     expect(obj.balance).toBe(10.5);
     expect(obj.is_active).toBe(true);
     expect(obj.full_name).toBe("Ada");
+  });
+});
+
+describe("sqlLiteral / toInsert", () => {
+  it("quotes strings, escapes apostrophes, bares numbers/bools, NULL", () => {
+    expect(sqlLiteral(null)).toBe("NULL");
+    expect(sqlLiteral("42")).toBe("42");
+    expect(sqlLiteral("3.14")).toBe("3.14");
+    expect(sqlLiteral("true")).toBe("TRUE");
+    expect(sqlLiteral("O'Brien")).toBe("'O''Brien'");
+  });
+  it("builds an INSERT from columns + a row", () => {
+    const out = toInsert(["id", "name", "note"], ["1", "Ada", null], "users");
+    expect(out).toBe("INSERT INTO users (id, name, note) VALUES (1, 'Ada', NULL);");
   });
 });

@@ -3,6 +3,7 @@ import { Sparkles, MapPin } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { AddToDebug } from "@/components/AddToDebug";
 import { cn } from "@/lib/utils";
 import { parseStackTrace, rootFrame } from "@/tools/lib/stacktrace";
 import { aiChat, AiNotConfiguredError } from "@/lib/ai";
@@ -53,7 +54,21 @@ export function StackTraceAnalyzer() {
         <div className="flex flex-col gap-2 overflow-auto">
           {parsed.exceptionType ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3">
-              <div className="font-mono text-sm font-semibold text-destructive">{parsed.exceptionType}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="font-mono text-sm font-semibold text-destructive">{parsed.exceptionType}</div>
+                <AddToDebug
+                  variant="ghost"
+                  label="Add to Debug"
+                  makeEvent={() => ({
+                    source: "exception",
+                    status: "error",
+                    title: `${parsed.exceptionType}${root ? ` @ ${root.method}` : ""}`,
+                    service: root?.file ?? undefined,
+                    error: `${parsed.exceptionType}: ${parsed.message ?? ""}\n${root ? `${root.method} ${root.file ?? ""}${root.line ? `:${root.line}` : ""}` : ""}`.trim(),
+                    payload: input.slice(0, 1500),
+                  })}
+                />
+              </div>
               {parsed.message && <div className="mt-1 text-sm">{parsed.message}</div>}
             </div>
           ) : (

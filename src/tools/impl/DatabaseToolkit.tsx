@@ -49,6 +49,7 @@ import {
   toEfEntity,
   toTsInterface,
   toJsonExample,
+  toInsert,
 } from "@/tools/lib/dbCodegen";
 
 type Tab = "explorer" | "query";
@@ -87,11 +88,15 @@ export function DatabaseToolkit() {
   const duplicate = useDbStore((s) => s.duplicate);
   const setPassword = useDbStore((s) => s.setPassword);
   const passwords = useDbStore((s) => s.passwords);
+  const pushHistory = useDbStore((s) => s.pushHistory);
+  const history = useDbStore((s) => s.history);
+  const clearHistory = useDbStore((s) => s.clearHistory);
 
   const active = connections.find((c) => c.id === activeId) ?? null;
 
   const activeEnv = useApiStore((s) => s.environments.find((e) => e.id === s.activeEnvId));
   const envDbRefs = (activeEnv?.connections ?? []).filter((c) => c.kind === "database");
+  const connHistory = active ? history.filter((h) => h.connId === active.id) : [];
 
   const [editing, setEditing] = useState<DbConnection | null>(null);
   const [tab, setTab] = useState<Tab>("query");
@@ -242,10 +247,12 @@ export function DatabaseToolkit() {
       setResult(r);
       setConfirmRisk(false);
       mark(active.id, { state: "ok", version: activeStatus.version });
+      pushHistory({ connId: active.id, sql, ok: true, rowCount: r.rowCount });
     } catch (e) {
       const msg = (e as Error).message;
       mark(active.id, { state: "fail", error: msg });
       setError(msg);
+      pushHistory({ connId: active.id, sql, ok: false });
     } finally {
       setBusy(null);
     }
@@ -515,6 +522,22 @@ export function DatabaseToolkit() {
                       <Play /> {busy === "query" ? "Running…" : confirmRisk ? "Run anyway" : "Run"}
                     </Button>
                     {confirmRisk && <Button size="sm" variant="ghost" onClick={() => setConfirmRisk(false)}>Cancel</Button>}
+                    {connHistory.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) setSql(e.target.value); }}
+                        className="h-8 max-w-[240px] rounded-md border border-input bg-transparent px-2 text-xs"
+                        title="Query history for this connection"
+                      >
+                        <option value="">History ({connHistory.length})…</option>
+                        {connHistory.map((h) => (
+                          <option key={h.id} value={h.sql}>{h.ok ? "" : "✗ "}{firstLine(h.sql)}</option>
+                        ))}
+                      </select>
+                    )}
+                    {connHistory.length > 0 && (
+                      <Button size="sm" variant="ghost" title="Clear history" onClick={() => clearHistory(active.id)}><Trash2 /></Button>
+                    )}
                     <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
                       Max rows
                       <Input type="number" value={maxRows} min={1} max={5000} onChange={(e) => setMaxRows(Math.max(1, Math.min(5000, Number(e.target.value) || 1000)))} className="h-8 w-24" />
@@ -685,6 +708,9 @@ function firstLine(sql: string): string {
 
 function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: QueryResult; codeGen: CodeGen | null; setCodeGen: (c: CodeGen | null) => void; debugEvent: () => import("@/tools/lib/debugSession").ParsedEvent }) {
   const cols = useMemo(() => inferColumns(result), [result]);
+  const [filter, setFilter] = useState("");
+  const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(null);
+  const [openRow, setOpenRow] = useState<number | null>(null);
 
   const generated = useMemo(() => {
     if (!codeGen) return "";
@@ -695,12 +721,36 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
     return toJsonExample(result, cols);
   }, [codeGen, cols, result]);
 
+  // Filter, then sort, keeping the original row index for the detail/INSERT view.
+  const view = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    let rows = result.rows.map((row, idx) => ({ row, idx }));
+    if (q) rows = rows.filter(({ row }) => row.some((c) => (c ?? "").toLowerCase().includes(q)));
+    if (sort) {
+      const { col, dir } = sort;
+      rows = [...rows].sort((a, b) => {
+        const av = a.row[col] ?? "", bv = b.row[col] ?? "";
+        const na = Number(av), nb = Number(bv);
+        const cmp = !Number.isNaN(na) && !Number.isNaN(nb) && av !== "" && bv !== "" ? na - nb : av.localeCompare(bv);
+        return dir === "asc" ? cmp : -cmp;
+      });
+    }
+    return rows;
+  }, [result.rows, filter, sort]);
+
+  const cycleSort = (col: number) =>
+    setSort((cur) => (cur?.col !== col ? { col, dir: "asc" } : cur.dir === "asc" ? { col, dir: "desc" } : null));
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{result.rowCount} row{result.rowCount === 1 ? "" : "s"}</span>
         <span>· {result.elapsedMs} ms</span>
         {result.truncated && <Badge variant="warning">truncated to {result.rows.length}</Badge>}
+        {result.columns.length > 0 && (
+          <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter rows…" className="h-7 w-40" />
+        )}
+        {filter && <span>{view.length} match</span>}
         <div className="ml-auto flex gap-1">
           <AddToDebug makeEvent={debugEvent} label="Debug" variant="ghost" />
           <CopyButton value={toCsv(result)} label="CSV" />
@@ -733,13 +783,17 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
             <thead className="sticky top-0 border-b border-border bg-card text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-2 py-1.5 font-medium">#</th>
-                {result.columns.map((col) => <th key={col} className="whitespace-nowrap px-3 py-1.5 font-medium">{col}</th>)}
+                {result.columns.map((col, ci) => (
+                  <th key={col} onClick={() => cycleSort(ci)} className="cursor-pointer select-none whitespace-nowrap px-3 py-1.5 font-medium hover:text-foreground" title="Click to sort">
+                    {col}{sort?.col === ci ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {result.rows.map((row, ri) => (
-                <tr key={ri} className="hover:bg-secondary/40">
-                  <td className="px-2 py-1 text-xs text-muted-foreground">{ri + 1}</td>
+              {view.map(({ row, idx }) => (
+                <tr key={idx} className={cn("cursor-pointer hover:bg-secondary/40", openRow === idx && "bg-primary/5")} onClick={() => setOpenRow(openRow === idx ? null : idx)}>
+                  <td className="px-2 py-1 text-xs text-muted-foreground">{idx + 1}</td>
                   {row.map((cell, ci) => (
                     <td key={ci} className={cn("mono max-w-[360px] truncate px-3 py-1", cell === null && "italic text-muted-foreground")} title={cell ?? "NULL"}>
                       {cell === null ? "NULL" : cell}
@@ -753,8 +807,35 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
       ) : (
         <p className="text-sm text-muted-foreground">Statement executed. {result.rowCount} row(s) affected.</p>
       )}
+
+      {openRow !== null && result.rows[openRow] && (
+        <div className="rounded-md border border-border bg-secondary/20 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Row {openRow + 1}</span>
+            <div className="ml-auto flex gap-1">
+              <CopyButton value={toInsert(result.columns, result.rows[openRow])} label="INSERT" />
+              <CopyButton value={JSON.stringify(rowObject(result, openRow), null, 2)} label="JSON" />
+              <Button size="sm" variant="ghost" onClick={() => setOpenRow(null)}>Close</Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+            {result.columns.map((col, ci) => (
+              <div key={col} className="flex gap-2 text-xs">
+                <span className="min-w-32 shrink-0 text-muted-foreground">{col}</span>
+                <span className={cn("mono break-all", result.rows[openRow][ci] === null && "italic text-muted-foreground")}>{result.rows[openRow][ci] ?? "NULL"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function rowObject(r: QueryResult, idx: number): Record<string, string | null> {
+  const o: Record<string, string | null> = {};
+  r.columns.forEach((c, i) => (o[c] = r.rows[idx][i]));
+  return o;
 }
 
 function toObjects(r: QueryResult): Record<string, string | null>[] {

@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — DB Toolkit quick-wins + more Debug capture
+- **Database Toolkit**: per-connection **query history** (persisted, re-run from a dropdown),
+  results grid **sort by column** + **filter box**, **row detail panel** (vertical
+  key/value), and **generate INSERT / copy row as JSON** from a row. New tested helpers
+  `sqlLiteral` / `toInsert` (+2 unit tests).
+- **More Debug capture**: `AiPromptTool` gained an optional `capture` hook — **Error
+  Explainer** and **Stack Trace Analyzer** now push an `exception` event to the Debug
+  Session in one click.
+
+
 ### Added — Environment Manager 2.0
 - Environments now hold **typed connection references** (database / API / Redis / NATS /
   RabbitMQ / MQTT / WebSocket) alongside variables — metadata only, no secrets stored.

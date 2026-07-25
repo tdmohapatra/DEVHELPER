@@ -24,14 +24,14 @@ Legend: ✅ done · 🔨 in progress · ⬜ todo · 🔒 blocked/needs infra
 ---
 
 ## Priority 1 — Quick wins (pure frontend, low risk)
-- ⬜ **Query history** (per connection, persisted) + re-run
+- ✅ **Query history** (per connection, persisted) + re-run
 - ⬜ **Saved queries / snippets** with names + tags (tie into existing Snippet Library)
 - ⬜ **Multiple query tabs**
 - ⬜ **Run on Ctrl+Enter**, format on Shift+Alt+F (reuse existing SQL Formatter)
-- ⬜ **Results: sort by column**, client-side filter box, column resize
-- ⬜ **Row detail panel** — click a row → vertical key/value view (wide tables)
-- ⬜ **Copy cell / copy row / copy row as JSON**
-- ⬜ **Generate INSERT / UPDATE from a row** (with correct per-engine quoting)
+- ✅ **Results: sort by column**, client-side filter box (column resize still todo)
+- ✅ **Row detail panel** — click a row → vertical key/value view (wide tables)
+- ✅ **Copy row as JSON** (cell/row copy still todo)
+- 🔨 **Generate INSERT from a row** (done; UPDATE still todo)
 - ⬜ **Export**: SQL INSERT, Markdown table, Excel (.xlsx), clipboard-as-TSV
 - ⬜ **Copy connection string as…** ADO.NET / JDBC / EF Core / psql / sqlcmd / mysql
 - ⬜ **Pretty-view JSON/XML cells** in a popover; **BLOB download**

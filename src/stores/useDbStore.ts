@@ -4,9 +4,21 @@ import type { DbConnection } from "@/tools/lib/dbTypes";
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.floor(performance.now())));
 
+export interface DbHistoryEntry {
+  id: string;
+  connId: string;
+  sql: string;
+  at: number;
+  ok: boolean;
+  rowCount?: number;
+}
+
+const HISTORY_LIMIT = 50;
+
 interface DbState {
   connections: DbConnection[];
   activeId: string | null;
+  history: DbHistoryEntry[];
   /**
    * Session-only passwords, keyed by connection id. NEVER persisted — cleared when the
    * app closes. Secure OS credential storage (DPAPI / Credential Manager) is a later step.
@@ -20,6 +32,8 @@ interface DbState {
   setPassword: (id: string, password: string) => void;
   getPassword: (id: string) => string;
   clearPasswords: () => void;
+  pushHistory: (e: Omit<DbHistoryEntry, "id" | "at">) => void;
+  clearHistory: (connId: string) => void;
 }
 
 export const useDbStore = create<DbState>()(
@@ -27,6 +41,7 @@ export const useDbStore = create<DbState>()(
     (set, get) => ({
       connections: [],
       activeId: null,
+      history: [],
       passwords: {},
 
       upsert: (c) => {
@@ -61,11 +76,16 @@ export const useDbStore = create<DbState>()(
       setPassword: (id, password) => set((s) => ({ passwords: { ...s.passwords, [id]: password } })),
       getPassword: (id) => get().passwords[id] ?? "",
       clearPasswords: () => set({ passwords: {} }),
+      pushHistory: (e) =>
+        set((s) => ({
+          history: [{ ...e, id: uid(), at: Date.now() }, ...s.history].slice(0, HISTORY_LIMIT),
+        })),
+      clearHistory: (connId) => set((s) => ({ history: s.history.filter((h) => h.connId !== connId) })),
     }),
     {
       name: "devhelper-db",
-      // Persist connection metadata only. Passwords and active selection stay in memory.
-      partialize: (s) => ({ connections: s.connections }),
+      // Persist connection metadata + query history. Passwords and active selection stay in memory.
+      partialize: (s) => ({ connections: s.connections, history: s.history }),
     },
   ),
 );
