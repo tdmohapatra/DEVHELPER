@@ -5,6 +5,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Debug Session live capture (increment 2)
+- Reusable **`AddToDebug`** button — one-click capture of a tool's result onto the active
+  Debug Session timeline (auto-creates a "Captured" session if none).
+- Wired into **API Tester** (response + network-error; extracts correlation/trace id from
+  `x-correlation-id`/`x-request-id`/`traceparent`), **Database Toolkit** (query success +
+  error, with SQL + row count + timing), and **SOAP Tester** (response).
+- Any tool can now feed the timeline in one line via `AddToDebug` / `pushDebugEvent()`.
+
+### Added — Debug Session (flagship, increment 1)
+- New **Debug Session** tool (diagnostics): reconstruct a distributed flow on one
+  chronological timeline. Events carry source/service/status/duration/correlation id/
+  trace id/payload/error.
+- **Import logs** — paste a JSON array, NDJSON, or plain lines; common fields
+  (timestamp/level/message/service/traceId/correlationId/duration) auto-detected across
+  Serilog/Winston/.NET-style shapes. Plus manual **Add event**.
+- Timeline with filters (source chips, errors-only, correlation-id, free-text), expandable
+  event detail, per-session persistence, Markdown/JSON export.
+- **Diagnose with AI** — sends the timeline to the configured provider for a
+  Root Cause / Evidence / Failure Point / Confidence / Actions summary (opt-in). Plus
+  "Copy AI context". `pushDebugEvent()` lets other tools feed a session (wiring = next).
+- +16 unit tests (parsing, timestamp/level mapping, sort/filter, export). 116 JS tests.
+
+
 ### Added — UI theming & Command Reference
 - Per-category accent colors across sidebar, tool cards and nav (`categoryColors.ts`).
 - **Command Reference** tool — tabbed, usage-grouped cheatsheet (Git, SSH/PuTTY, Linux,

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { toast } from "@/components/ui/toast";
 import { executeRequest, corsLimited } from "@/lib/http";
 import { formatXml } from "@/tools/lib/xml";
@@ -111,6 +112,19 @@ export function SoapTester() {
               <>
                 <Badge variant={response.ok ? "success" : "destructive"}>{response.status} {response.statusText}</Badge>
                 <span className="text-xs text-muted-foreground">{response.timeMs} ms</span>
+                <AddToDebug
+                  className="ml-auto"
+                  variant="ghost"
+                  label="Debug"
+                  makeEvent={() => ({
+                    source: "http" as const,
+                    status: response.ok ? ("ok" as const) : ("error" as const),
+                    title: `SOAP ${action || url} → ${response.status}`,
+                    durationMs: response.timeMs,
+                    payload: JSON.stringify({ url, action, body: response.body.slice(0, 2000) }),
+                    error: response.ok ? undefined : response.body.slice(0, 800),
+                  })}
+                />
               </>
             )}
           </div>

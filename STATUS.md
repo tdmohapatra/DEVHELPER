@@ -20,6 +20,34 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 
 ---
 
+## 2026-07-26 — Debug Session (flagship, increment 1)
+
+First slice of the flagship "debug a distributed flow" capability. Pure frontend, additive,
+works in browser + desktop.
+
+- [x] `debugSession.ts` — event/session model + pure logic: `parseLogEntries` (JSON array /
+      NDJSON / plain lines with Serilog/.NET field auto-detection), `sortEvents`,
+      `filterEvents`, `correlationIds`, `toMarkdown`, `buildAiContext`. 16 unit tests.
+- [x] `useDebugStore` — sessions CRUD + events (persisted); `pushDebugEvent()` entry point
+      for other tools to feed a session.
+- [x] `Debug Session` tool (diagnostics category): sessions rail, timeline with status dots
+      + expandable detail, filters (source/errors-only/correlation/search), Import logs +
+      Add event, Markdown/JSON export, **Diagnose with AI** (opt-in) + Copy AI context.
+- [x] Typecheck + 116 JS tests + build clean. No native changes.
+
+### Increment 2 — live capture (done 2026-07-26)
+- [x] Reusable `AddToDebug` component + `pushDebugEvent()` entry point.
+- [x] Wired: **API Tester** (response + network error, correlation/trace-id extraction),
+      **Database Toolkit** (query success + error), **SOAP Tester** (response).
+- [x] Typecheck + 116 JS tests + build clean. Any other tool adopts capture in one line.
+
+### Next increments
+- [ ] Trace Explorer (search a correlation/trace id across sources).
+- [ ] Visual service-flow diagram from the timeline.
+- [ ] Capture from messaging tools (Redis/NATS/RabbitMQ) + Error Explainer / Stack Trace.
+
+---
+
 ## 2026-07-25 — MSSQL connectivity fix + local-server detection
 
 Addressing "can't connect to local SQL Server with credentials".

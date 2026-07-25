@@ -40,6 +40,7 @@ import {
   FolderKanban,
   TerminalSquare,
   Database as DatabaseIcon,
+  Bug as BugIcon,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -461,6 +462,16 @@ export const TOOLS: Tool[] = [
     route: "/tools/database-toolkit",
     component: L(() => import("./impl/DatabaseToolkit"), "DatabaseToolkit"),
     requiresNative: true,
+  },
+  {
+    id: "debug-session",
+    name: "Debug Session",
+    description: "Reconstruct a distributed flow on one timeline — aggregate logs, API calls, DB & messages by correlation/trace id, then diagnose",
+    category: "diagnostics",
+    icon: BugIcon,
+    keywords: ["debug", "session", "timeline", "trace", "correlation", "root cause", "diagnose", "incident", "logs", "distributed"],
+    route: "/tools/debug-session",
+    component: L(() => import("./impl/DebugSession"), "DebugSession"),
   },
 ];
 

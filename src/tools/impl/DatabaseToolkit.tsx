@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { NativeNotice } from "@/components/NativeNotice";
 import { toast } from "@/components/ui/toast";
 import { invokeNative, isTauri } from "@/lib/platform";
@@ -408,7 +409,23 @@ export function DatabaseToolkit() {
                 </div>
               )}
 
-              {error && <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</div>}
+              {error && (
+                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+                  <span className="min-w-0 flex-1 break-words">{error}</span>
+                  <AddToDebug
+                    variant="ghost"
+                    label="Debug"
+                    makeEvent={() => ({
+                      source: "database" as const,
+                      status: "error" as const,
+                      title: `${active.engine} · ${firstLine(sql)} → failed`,
+                      service: active.name,
+                      error,
+                      payload: JSON.stringify({ sql, engine: active.engine }),
+                    })}
+                  />
+                </div>
+              )}
 
               {/* Tabs */}
               <div className="flex gap-1 border-b border-border">
@@ -484,7 +501,21 @@ export function DatabaseToolkit() {
                     </label>
                   </div>
 
-                  {result && <ResultView result={result} codeGen={codeGen} setCodeGen={setCodeGen} />}
+                  {result && (
+                    <ResultView
+                      result={result}
+                      codeGen={codeGen}
+                      setCodeGen={setCodeGen}
+                      debugEvent={() => ({
+                        source: "database" as const,
+                        status: "ok" as const,
+                        title: `${active.engine} · ${firstLine(sql)} (${result.rowCount} rows)`,
+                        service: active.name,
+                        durationMs: result.elapsedMs,
+                        payload: JSON.stringify({ sql, rowCount: result.rowCount, columns: result.columns }),
+                      })}
+                    />
+                  )}
                 </div>
               )}
             </div>
@@ -627,7 +658,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function ResultView({ result, codeGen, setCodeGen }: { result: QueryResult; codeGen: CodeGen | null; setCodeGen: (c: CodeGen | null) => void }) {
+function firstLine(sql: string): string {
+  const s = sql.trim().split("\n")[0].slice(0, 60);
+  return s + (sql.trim().length > s.length ? "…" : "");
+}
+
+function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: QueryResult; codeGen: CodeGen | null; setCodeGen: (c: CodeGen | null) => void; debugEvent: () => import("@/tools/lib/debugSession").ParsedEvent }) {
   const cols = useMemo(() => inferColumns(result), [result]);
 
   const generated = useMemo(() => {
@@ -646,6 +682,7 @@ function ResultView({ result, codeGen, setCodeGen }: { result: QueryResult; code
         <span>· {result.elapsedMs} ms</span>
         {result.truncated && <Badge variant="warning">truncated to {result.rows.length}</Badge>}
         <div className="ml-auto flex gap-1">
+          <AddToDebug makeEvent={debugEvent} label="Debug" variant="ghost" />
           <CopyButton value={toCsv(result)} label="CSV" />
           <CopyButton value={JSON.stringify(toObjects(result), null, 2)} label="JSON" />
           <select

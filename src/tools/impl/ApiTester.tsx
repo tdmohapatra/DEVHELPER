@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,32 @@ export function ApiTester() {
   };
 
   const cancel = () => abortRef.current?.abort();
+
+  const targetUrl = resolved?.url ?? req.url;
+  const capturedIds = () => extractIds(resolved?.headers ?? {}, response?.headers ?? {});
+
+  const responseEvent = () => {
+    const ids = capturedIds();
+    return {
+      source: "api" as const,
+      status: response!.ok ? ("ok" as const) : ("error" as const),
+      title: `${req.method} ${targetUrl} → ${response!.status} ${response!.statusText}`.trim(),
+      durationMs: response!.timeMs,
+      correlationId: ids.correlationId,
+      traceId: ids.traceId,
+      payload: JSON.stringify({ method: req.method, url: targetUrl, status: response!.status, body: response!.body.slice(0, 2000) }),
+      error: response!.ok ? undefined : response!.body.slice(0, 800),
+    };
+  };
+
+  const errorEvent = () => ({
+    source: "api" as const,
+    status: "error" as const,
+    title: `${req.method} ${targetUrl} → failed`,
+    payload: JSON.stringify({ method: req.method, url: targetUrl }),
+    error,
+    ...extractIds(resolved?.headers ?? {}, {}),
+  });
 
   const save = () => {
     const name = req.name?.trim() || req.url || "Untitled";
@@ -195,7 +222,10 @@ export function ApiTester() {
           {loading && <div className="p-6 text-sm text-muted-foreground">Sending request…</div>}
           {error && !loading && (
             <div className="m-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-              <div className="font-medium text-destructive">Request failed</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium text-destructive">Request failed</div>
+                <AddToDebug makeEvent={errorEvent} label="Add to Debug" variant="ghost" />
+              </div>
               <div className="mt-1 text-muted-foreground">{error}</div>
             </div>
           )}
@@ -209,6 +239,7 @@ export function ApiTester() {
                   <TabButton active={respTab === "body"} onClick={() => setRespTab("body")} label="Body" />
                   <TabButton active={respTab === "headers"} onClick={() => setRespTab("headers")} label={`Headers (${Object.keys(response.headers).length})`} />
                   <CopyButton value={respTab === "body" ? prettyBody : JSON.stringify(response.headers, null, 2)} size="sm" variant="ghost" />
+                  <AddToDebug makeEvent={responseEvent} label="Debug" variant="ghost" />
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
@@ -357,6 +388,21 @@ function RequestRow({ r, active, onLoad, onDelete }: { r: ApiRequest; active: bo
       </button>
     </div>
   );
+}
+
+/** Pull correlation/trace ids from request + response headers (common conventions). */
+function extractIds(reqHeaders: Record<string, string>, resHeaders: Record<string, string>): { correlationId?: string; traceId?: string } {
+  const all: Record<string, string> = {};
+  for (const [k, v] of Object.entries(reqHeaders || {})) all[k.toLowerCase()] = v;
+  for (const [k, v] of Object.entries(resHeaders || {})) all[k.toLowerCase()] = v;
+  const correlationId = all["x-correlation-id"] || all["correlation-id"] || all["x-request-id"] || all["request-id"] || undefined;
+  let traceId = all["x-trace-id"] || all["trace-id"] || undefined;
+  const tp = all["traceparent"];
+  if (!traceId && tp) {
+    const parts = tp.split("-");
+    if (parts.length >= 2 && parts[1]) traceId = parts[1];
+  }
+  return { correlationId, traceId };
 }
 
 function formatBytes(n: number): string {
