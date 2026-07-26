@@ -5,6 +5,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Toolchain Manager (replaces the Environment Checker)
+- The `environment-checker` tool is now a full **Toolchain Manager**: a 59-tool catalog
+  covering the whole stack (.NET / Node / Angular / Python / Java / Go / Rust, Visual
+  Studio, VS Code, Cursor, SQL Server + SSMS + sqlcmd + ODBC, PostgreSQL, Oracle
+  Instant Client / SQL Developer / Toad, DBeaver, Redis + Insight, RabbitMQ + Erlang,
+  NATS, Elasticsearch, Docker, Azure/AWS CLI, kubectl, Helm, Terraform, Postman, curl,
+  Wireshark, Ollama, Claude Code, Git, GitHub CLI, WinMerge, winget, jq, CMake…).
+- Each tool shows **what it does** (capability chips), whether it is installed, the
+  detected version, how it was found (cli / registry / path) and any caveat note.
+- **One-click install of the latest version** via winget, behind a two-step confirm that
+  shows the exact command; output is streamed back into a log panel and the tool is
+  re-probed on success. Non-winget tools show a vendor download link or a copyable
+  command (npm globals). Package ids are validated natively so they cannot inject args.
+- Filters: search over names *and* capabilities, category tabs, all/installed/missing,
+  plus headline counts including a "core stack" score.
+- New native commands `toolchain_probe` / `toolchain_install` /
+  `toolchain_winget_available` (`commands/toolchain.rs`): declarative checks (CLI version
+  command, Windows uninstall-registry DisplayName match, filesystem path with `%VAR%`
+  expansion), 8-lane threaded probing, console windows suppressed, registry snapshot
+  cached per process. +13 JS tests, +5 Rust tests.
+
 ### Changed — Reliability & keyboard (error boundary, Ctrl+Enter, grid paging)
 - **Error boundary** around the tool view — a crashing tool now shows a recover card
   (Try again / Dashboard) instead of white-screening the app; resets on navigation.

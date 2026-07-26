@@ -20,6 +20,30 @@ release-style notes and `ARCHITECTURE.md` for design detail.
 
 ---
 
+## 2026-07-26 — Toolchain Manager (Environment Checker rebuilt)
+
+- [x] `toolchain.ts`: declarative 59-tool catalog (runtimes, IDEs, databases, messaging,
+      cloud, API, AI, VCS, CLI) with capability chips, winget id / download URL / manual
+      command, caveat notes and an `essential` core-stack flag. Pure helpers
+      (`probeSpecs`/`cleanVersion`/`buildRows`/`filterRows`/`summarize`/`byGroup`/
+      `isValidWingetId`/`installCommand`) + 20 unit tests. 206 JS tests total.
+- [x] `commands/toolchain.rs`: `toolchain_probe` (cli / uninstall-registry / path checks,
+      `%VAR%` expansion, 8-lane threading, `CREATE_NO_WINDOW`, registry snapshot cached in a
+      `OnceLock` and read once via PowerShell → JSON), `toolchain_install` (winget, package
+      id validated against arg injection, transcript tail returned) and
+      `toolchain_winget_available`. +5 Rust tests (9 total).
+- [x] UI: headline counts, search over names *and* capabilities, category tabs,
+      all/installed/missing filter, per-tool card with version + how it was detected,
+      two-step confirm before any install, winget output log, single-tool re-probe after a
+      successful install. `opener:allow-open-url` added to the capability set for the
+      vendor download links.
+- [x] Verified: typecheck, 206 JS tests, `cargo check`, `cargo test --lib`, `vite build`,
+      release exe. GUI not clicked (no browser/GUI harness in this session) — detection
+      logic covered by unit tests plus a manual PowerShell cross-check of the registry
+      patterns against this machine.
+
+---
+
 ## 2026-07-26 — Config Inspector
 
 - [x] New tool (devops): compare appsettings.json across N environments. `configInspect.ts`
