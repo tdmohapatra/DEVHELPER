@@ -574,7 +574,14 @@ export function DatabaseToolkit() {
                 <DbMonitor engine={active.engine} runSql={runSql} />
               ) : (
                 <div className="flex flex-col gap-2">
-                  <Textarea mono value={sql} onChange={(e) => { setSql(e.target.value); setConfirmRisk(false); }} className="min-h-32" placeholder="Write SQL…" />
+                  <Textarea
+                    mono
+                    value={sql}
+                    onChange={(e) => { setSql(e.target.value); setConfirmRisk(false); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !busy && !needsPassword && engineReady(active.engine)) { e.preventDefault(); runQuery(); } }}
+                    className="min-h-32"
+                    placeholder="Write SQL… (Ctrl+Enter to run)"
+                  />
 
                   {risk && (
                     <div className={cn(
@@ -806,6 +813,7 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(null);
   const [openRow, setOpenRow] = useState<number | null>(null);
+  const [gridPage, setGridPage] = useState(0);
 
   const generated = useMemo(() => {
     if (!codeGen) return "";
@@ -836,6 +844,12 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
   const cycleSort = (col: number) =>
     setSort((cur) => (cur?.col !== col ? { col, dir: "asc" } : cur.dir === "asc" ? { col, dir: "desc" } : null));
 
+  // Paginate the (filtered + sorted) view so we never render thousands of DOM rows at once.
+  const GRID_PAGE = 100;
+  const totalPages = Math.max(1, Math.ceil(view.length / GRID_PAGE));
+  const pageClamped = Math.min(gridPage, totalPages - 1);
+  const pageRows = view.slice(pageClamped * GRID_PAGE, pageClamped * GRID_PAGE + GRID_PAGE);
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -843,9 +857,16 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
         <span>· {result.elapsedMs} ms</span>
         {result.truncated && <Badge variant="warning">truncated to {result.rows.length}</Badge>}
         {result.columns.length > 0 && (
-          <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter rows…" className="h-7 w-40" />
+          <Input value={filter} onChange={(e) => { setFilter(e.target.value); setGridPage(0); }} placeholder="Filter rows…" className="h-7 w-40" />
         )}
         {filter && <span>{view.length} match</span>}
+        {view.length > GRID_PAGE && (
+          <span className="flex items-center gap-1">
+            <Button size="sm" variant="ghost" className="h-6 px-1" disabled={pageClamped === 0} onClick={() => setGridPage(pageClamped - 1)}>‹</Button>
+            page {pageClamped + 1}/{totalPages}
+            <Button size="sm" variant="ghost" className="h-6 px-1" disabled={pageClamped >= totalPages - 1} onClick={() => setGridPage(pageClamped + 1)}>›</Button>
+          </span>
+        )}
         <div className="ml-auto flex gap-1">
           <AddToDebug makeEvent={debugEvent} label="Debug" variant="ghost" />
           <CopyButton value={toCsv(result)} label="CSV" />
@@ -886,7 +907,7 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {view.map(({ row, idx }) => (
+              {pageRows.map(({ row, idx }) => (
                 <tr key={idx} className={cn("cursor-pointer hover:bg-secondary/40", openRow === idx && "bg-primary/5")} onClick={() => setOpenRow(openRow === idx ? null : idx)}>
                   <td className="px-2 py-1 text-xs text-muted-foreground">{idx + 1}</td>
                   {row.map((cell, ci) => (

@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/toast";
 import { Dashboard } from "@/pages/Dashboard";
 import { ToolList } from "@/pages/ToolList";
@@ -94,9 +95,11 @@ export default function App() {
               </div>
             }
           >
-            <div key={viewKey} className="h-full animate-fade-in">
-              <Content />
-            </div>
+            <ErrorBoundary key={viewKey} onHome={() => openView({ kind: "dashboard" })}>
+              <div className="h-full animate-fade-in">
+                <Content />
+              </div>
+            </ErrorBoundary>
           </Suspense>
         </main>
       </div>

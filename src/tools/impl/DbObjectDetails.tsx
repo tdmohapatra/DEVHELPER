@@ -69,6 +69,13 @@ export function DbObjectDetails({ obj, engine, runSql, onClose, onSelect }: {
     setDef(extractDefinition(r));
   }, [engine, obj.kind, obj.schema, obj.name, runSql]);
 
+  // Esc closes the details panel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   // Load the active tab's data on demand.
   useEffect(() => {
     let cancelled = false;

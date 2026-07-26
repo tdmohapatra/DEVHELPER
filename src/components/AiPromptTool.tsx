@@ -69,9 +69,16 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-muted-foreground">{inputLabel}</label>
-          <Textarea mono className="h-[calc(100vh-380px)] min-h-56" value={input} onChange={(e) => setInput(e.target.value)} placeholder={placeholder} />
+          <Textarea
+            mono
+            className="h-[calc(100vh-380px)] min-h-56"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !loading && configured && input.trim()) { e.preventDefault(); run(); } }}
+            placeholder={placeholder}
+          />
           <div className="mt-1 flex items-center gap-2">
-            <Button disabled={loading || !configured || !input.trim()} onClick={run}>
+            <Button disabled={loading || !configured || !input.trim()} onClick={run} title="Ctrl+Enter">
               <Sparkles /> {loading ? "Analyzing…" : "Analyze"}
             </Button>
             {capture && input.trim() && <AddToDebug makeEvent={() => capture(input, output)} label="Add to Debug" variant="ghost" />}

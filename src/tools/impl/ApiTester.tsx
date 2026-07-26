@@ -143,7 +143,10 @@ export function ApiTester() {
     <div className="flex h-full">
       <CollectionsPanel currentId={req.id} onNew={newRequest} onLoad={loadRequest} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className="flex min-w-0 flex-1 flex-col"
+        onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !loading) { e.preventDefault(); send(); } }}
+      >
         {/* Header */}
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Input

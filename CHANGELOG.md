@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Changed — Reliability & keyboard (error boundary, Ctrl+Enter, grid paging)
+- **Error boundary** around the tool view — a crashing tool now shows a recover card
+  (Try again / Dashboard) instead of white-screening the app; resets on navigation.
+- **Keyboard-first**: `Ctrl/Cmd+Enter` runs the primary action in API Tester, the SQL
+  query editor and the AI tools; `Esc` closes the DB object-details panel.
+- **Result grid pagination** (100 rows/page) over the filtered+sorted set — big result
+  sets no longer render thousands of DOM rows at once.
+
 ### Changed — Formatted AI output (Markdown rendering)
 - AI results now render as **formatted Markdown** (headings, bold/italic, inline code,
   fenced code blocks with copy, ordered/unordered lists, links) instead of raw text.
