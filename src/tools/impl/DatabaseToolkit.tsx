@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Database as DbIcon,
   Plus,
@@ -16,6 +16,8 @@ import {
   CheckCircle2,
   XCircle,
   Circle,
+  Download,
+  Upload,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,8 @@ import {
   buildConnString,
   connTarget,
   dbConnectionFromEnvRef,
+  serializeConnections,
+  parseConnectionsFile,
   type DbConnection,
   type DbEngine,
   type DbObject,
@@ -102,6 +106,36 @@ export function DatabaseToolkit() {
   const pushHistory = useDbStore((s) => s.pushHistory);
   const history = useDbStore((s) => s.history);
   const clearHistory = useDbStore((s) => s.clearHistory);
+  const importConnections = useDbStore((s) => s.importConnections);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  function exportConnections() {
+    if (connections.length === 0) { toast.error("No connections to export"); return; }
+    const blob = new Blob([serializeConnections(connections)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "devhelper-connections.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${connections.length} connection${connections.length === 1 ? "" : "s"}`);
+  }
+
+  function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const n = importConnections(parseConnectionsFile(String(reader.result)));
+        toast.success(`Imported ${n} connection${n === 1 ? "" : "s"}`);
+      } catch (err) {
+        toast.error(`Import failed: ${(err as Error).message}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
 
   const active = connections.find((c) => c.id === activeId) ?? null;
 
@@ -306,9 +340,14 @@ export function DatabaseToolkit() {
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Connections</div>
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={!isTauri() || detecting} onClick={detectLocal}>
-              <RefreshCw className={cn("size-3.5", detecting && "animate-spin")} /> Detect local
-            </Button>
+            <div className="flex items-center gap-0.5">
+              <input ref={importFileRef} type="file" accept=".json,application/json" className="hidden" onChange={onImportFile} />
+              <button title="Export connections" aria-label="Export connections" className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={exportConnections}><Download className="size-3.5" /></button>
+              <button title="Import connections" aria-label="Import connections" className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground" onClick={() => importFileRef.current?.click()}><Upload className="size-3.5" /></button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={!isTauri() || detecting} onClick={detectLocal}>
+                <RefreshCw className={cn("size-3.5", detecting && "animate-spin")} /> Detect
+              </Button>
+            </div>
           </div>
 
           {envDbRefs.length > 0 && (

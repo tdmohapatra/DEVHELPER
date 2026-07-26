@@ -53,6 +53,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   plain chips — no new dependency. Plus **Copy Mermaid** to export the flow for docs.
   New tested `serviceEdges` / `toMermaidFlow` helpers.
 
+### Added — Database Toolkit: export / import connections
+- **Export** all saved connections to a JSON file and **Import** them back (icons in the
+  connections rail). Passwords and the session-only raw connection string are never
+  included; imported connections get fresh ids and are appended. New tested
+  `serializeConnections` / `parseConnectionsFile` helpers.
+
 ### Added — Database Toolkit: Monitoring panel
 - New **Monitor** tab: **active sessions** (who's connected — with a **Kill session**
   control), **blocking & locks**, **last-modified objects**, and **database size**.

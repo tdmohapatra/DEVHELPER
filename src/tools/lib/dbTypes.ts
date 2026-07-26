@@ -99,6 +99,25 @@ export function connTarget(conn: DbConnection): string {
   return `${conn.host || "localhost"}:${conn.port || DEFAULT_PORTS[conn.engine] || "?"}/${conn.database || ""}`;
 }
 
+/** Serialize connections for export — strips the session-only raw string (and never had passwords). */
+export function serializeConnections(conns: DbConnection[]): string {
+  const clean = conns.map(({ rawConnString: _raw, ...c }) => c);
+  return JSON.stringify({ version: 1, kind: "devhelper-connections", connections: clean }, null, 2);
+}
+
+/** Parse an exported connections file (accepts {connections:[...]} or a bare array). Throws on bad input. */
+export function parseConnectionsFile(text: string): DbConnection[] {
+  const data = JSON.parse(text);
+  const list = Array.isArray(data) ? data : data?.connections;
+  if (!Array.isArray(list)) throw new Error("No 'connections' array found in file");
+  const valid = list.filter(
+    (c: unknown): c is DbConnection =>
+      !!c && typeof (c as DbConnection).name === "string" && typeof (c as DbConnection).engine === "string",
+  );
+  if (valid.length === 0) throw new Error("File contains no valid connections");
+  return valid.map((c) => ({ ...c, rawConnString: undefined }));
+}
+
 /** Map a loose engine string (from an env ref) onto a supported DbEngine. */
 export function normalizeEngine(v?: string): DbEngine {
   const s = (v || "").toLowerCase();

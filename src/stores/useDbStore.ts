@@ -34,6 +34,7 @@ interface DbState {
   clearPasswords: () => void;
   pushHistory: (e: Omit<DbHistoryEntry, "id" | "at">) => void;
   clearHistory: (connId: string) => void;
+  importConnections: (items: DbConnection[]) => number;
 }
 
 export const useDbStore = create<DbState>()(
@@ -81,6 +82,11 @@ export const useDbStore = create<DbState>()(
           history: [{ ...e, id: uid(), at: Date.now() }, ...s.history].slice(0, HISTORY_LIMIT),
         })),
       clearHistory: (connId) => set((s) => ({ history: s.history.filter((h) => h.connId !== connId) })),
+      importConnections: (items) => {
+        const withIds = items.map((c) => ({ ...c, id: uid(), rawConnString: undefined }));
+        set((s) => ({ connections: [...s.connections, ...withIds] }));
+        return withIds.length;
+      },
     }),
     {
       name: "devhelper-db",
