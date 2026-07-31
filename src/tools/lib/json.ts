@@ -5,22 +5,105 @@ export interface JsonValidation {
   error?: string;
 }
 
-export function validateJson(input: string): JsonValidation {
+// ---- Lenient parsing -------------------------------------------------------
+
+/**
+ * Remove `//` and block comments plus trailing commas, so config-style documents
+ * (appsettings.json, tsconfig.json) can be parsed by the strict JSON.parse.
+ * String literals are scanned so their contents are never touched.
+ */
+export function stripJsonComments(input: string): string {
+  let out = "";
+  let i = 0;
+  while (i < input.length) {
+    const c = input[i];
+
+    if (c === '"') {
+      out += c;
+      i++;
+      while (i < input.length) {
+        out += input[i];
+        if (input[i] === "\\") {
+          i++;
+          if (i < input.length) out += input[i];
+          i++;
+          continue;
+        }
+        if (input[i] === '"') {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    if (c === "/" && input[i + 1] === "/") {
+      while (i < input.length && input[i] !== "\n") i++;
+      continue;
+    }
+
+    if (c === "/" && input[i + 1] === "*") {
+      i += 2;
+      while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+
+    out += c;
+    i++;
+  }
+
+  // Drop commas that sit directly before a closing brace/bracket.
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** Parse JSON, tolerating comments and trailing commas. */
+export function parseJsonLoose(input: string): unknown {
+  return JSON.parse(stripJsonComments(input));
+}
+
+const parseWith = (input: string, loose: boolean): unknown =>
+  loose ? parseJsonLoose(input) : JSON.parse(input);
+
+export function validateJson(input: string, loose = false): JsonValidation {
   if (!input.trim()) return { valid: false, error: "Input is empty" };
   try {
-    JSON.parse(input);
+    parseWith(input, loose);
     return { valid: true };
   } catch (e) {
     return { valid: false, error: (e as Error).message };
   }
 }
 
-export function formatJson(input: string, indent = 2): string {
-  return JSON.stringify(JSON.parse(input), null, indent);
+export function formatJson(input: string, indent = 2, loose = false): string {
+  return JSON.stringify(parseWith(input, loose), null, indent);
 }
 
-export function minifyJson(input: string): string {
-  return JSON.stringify(JSON.parse(input));
+export function minifyJson(input: string, loose = false): string {
+  return JSON.stringify(parseWith(input, loose));
+}
+
+// ---- Escaped-string helpers ------------------------------------------------
+
+/**
+ * Turn an escaped JSON string literal into its raw text — the common case of a
+ * log/DB field holding `{\"a\":1}`. Surrounding quotes are optional.
+ */
+export function unescapeJsonString(input: string): string {
+  const text = input.trim();
+  if (!text) throw new Error("Input is empty");
+  if (text.startsWith('"') && text.endsWith('"') && text.length > 1) {
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "string") throw new Error("Not a JSON string literal");
+    return parsed;
+  }
+  return JSON.parse(`"${text}"`) as string;
+}
+
+/** Wrap raw text as an escaped JSON string literal, quotes included. */
+export function escapeJsonString(input: string): string {
+  return JSON.stringify(input);
 }
 
 /** Recursively sort object keys for stable output / diffing. */
@@ -86,6 +169,64 @@ export function diffJson(leftText: string, rightText: string): DiffEntry[] {
 
   walk(left, right, "");
   return entries;
+}
+
+// ---- Tree model ------------------------------------------------------------
+
+export type JsonKind = "object" | "array" | "string" | "number" | "boolean" | "null";
+
+export interface JsonChild {
+  /** Property name, or the index as a string for array elements. */
+  key: string;
+  value: unknown;
+  /** JSONPath of the child, e.g. `$.items[0].name`. */
+  path: string;
+}
+
+export function valueKind(v: unknown): JsonKind {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  const t = typeof v;
+  if (t === "object") return "object";
+  if (t === "number") return "number";
+  if (t === "boolean") return "boolean";
+  return "string";
+}
+
+/** `.key` when the name is a plain identifier, `['key']` otherwise. */
+export function appendPath(parent: string, key: string, isIndex: boolean): string {
+  if (isIndex) return `${parent}[${key}]`;
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `${parent}.${key}` : `${parent}['${key}']`;
+}
+
+/** Direct children of a container, already carrying their JSONPath. */
+export function childEntries(value: unknown, path: string): JsonChild[] {
+  if (Array.isArray(value)) {
+    return value.map((v, i) => ({ key: String(i), value: v, path: appendPath(path, String(i), true) }));
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).map(([k, v]) => ({
+      key: k,
+      value: v,
+      path: appendPath(path, k, false),
+    }));
+  }
+  return [];
+}
+
+/** One-line summary shown next to a collapsed node or a leaf value. */
+export function previewValue(v: unknown, maxLen = 60): string {
+  const kind = valueKind(v);
+  if (kind === "array") {
+    const n = (v as unknown[]).length;
+    return `[] ${n} item${n === 1 ? "" : "s"}`;
+  }
+  if (kind === "object") {
+    const n = Object.keys(v as object).length;
+    return `{} ${n} key${n === 1 ? "" : "s"}`;
+  }
+  const text = JSON.stringify(v) ?? "undefined";
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
 }
 
 // ---- JSON -> C# ------------------------------------------------------------
