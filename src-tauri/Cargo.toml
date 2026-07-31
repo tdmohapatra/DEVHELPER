@@ -31,7 +31,12 @@ tiberius = { version = "0.12", default-features = false, features = ["tds73", "n
 mysql_async = { version = "0.34", default-features = false, features = ["default-rustls"] }
 chrono = "0.4"
 rust_decimal = "1"
-uuid = "1"
+uuid = { version = "1", features = ["v4"] }
+# WebSocket client. native-tls matches the TLS stack already linked for SQL Server, and a
+# native client (unlike the browser's WebSocket API) can set handshake headers such as
+# Authorization — the reason this is not done in the webview.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Oracle is optional: the `oracle` crate needs Oracle Instant Client (ODPI-C) at build and
 # runtime. Kept off the default build so DevHelper compiles without it. Enable with:
 #   cargo build --features oracle   (Oracle Instant Client must be installed)

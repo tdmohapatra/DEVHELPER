@@ -64,16 +64,45 @@ async fn run(engine: &str, conn_str: &str, sql: &str, max_rows: usize) -> Result
 // PostgreSQL
 // ---------------------------------------------------------------------------
 
+/// Render a tokio-postgres error usefully.
+///
+/// Its `Display` is a category word — "db error", "error communicating with the server" —
+/// and everything actionable (SQLSTATE, the server's message, its hint) lives in the
+/// database error or the source chain. Reporting only the category tells the user nothing.
+fn pg_error(prefix: &str, err: &tokio_postgres::Error) -> String {
+    use std::error::Error;
+
+    if let Some(db) = err.as_db_error() {
+        let mut text = format!("{prefix}: {} [{}]", db.message(), db.code().code());
+        if let Some(detail) = db.detail() {
+            text.push_str(&format!("\n{detail}"));
+        }
+        if let Some(hint) = db.hint() {
+            text.push_str(&format!("\nHint: {hint}"));
+        }
+        return text;
+    }
+
+    // Not a server-side error: unwrap the chain so the transport cause is visible.
+    let mut text = format!("{prefix}: {err}");
+    let mut source = err.source();
+    while let Some(cause) = source {
+        text.push_str(&format!(" — {cause}"));
+        source = cause.source();
+    }
+    text
+}
+
 async fn pg_query(conn_str: &str, sql: &str, cap: usize) -> Result<QueryResult, String> {
     let (client, connection) = tokio_postgres::connect(conn_str, tokio_postgres::NoTls)
         .await
-        .map_err(|e| format!("Connect failed: {e}"))?;
+        .map_err(|e| pg_error("Connect failed", &e))?;
     tauri::async_runtime::spawn(async move {
         let _ = connection.await;
     });
 
     let start = Instant::now();
-    let messages = client.simple_query(sql).await.map_err(|e| e.to_string())?;
+    let messages = client.simple_query(sql).await.map_err(|e| pg_error("Query failed", &e))?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     let mut columns: Vec<String> = Vec::new();
@@ -166,25 +195,89 @@ fn value_ref_to_string(v: rusqlite::types::ValueRef<'_>) -> Option<String> {
 // SQL Server (tiberius)
 // ---------------------------------------------------------------------------
 
+/// ADO keys that carry the server address.
+const MSSQL_SERVER_KEYS: [&str; 5] = ["server", "data source", "addr", "address", "network address"];
+
+/// Split an ADO string into `key=value` segments, keeping the original text of each.
+fn ado_segments(conn_str: &str) -> Vec<String> {
+    conn_str.split(';').map(|s| s.to_string()).collect()
+}
+
+/// Rewrite `Server=HOST\INSTANCE` into `Server=tcp:HOST,PORT`.
+///
+/// tiberius only performs SQL Browser lookups with the `sql-browser-tokio` feature, so the
+/// instance is resolved here instead — a named instance is what most developers actually
+/// have, and its port is dynamic.
+pub async fn resolve_mssql_instance(conn_str: &str) -> Result<String, String> {
+    let mut segments = ado_segments(conn_str);
+    for seg in segments.iter_mut() {
+        let Some((key, value)) = seg.split_once('=') else { continue };
+        let key_norm = key.trim().to_ascii_lowercase();
+        if !MSSQL_SERVER_KEYS.contains(&key_norm.as_str()) {
+            continue;
+        }
+
+        let raw = value.trim().trim_matches('"');
+        let addr = raw.strip_prefix("tcp:").unwrap_or(raw).trim();
+        let Some((host, rest)) = addr.split_once('\\') else { continue };
+        let host = host.trim();
+        if host.is_empty() {
+            continue;
+        }
+
+        // `HOST\INSTANCE,1433` — the port is already explicit, so just drop the instance.
+        let new_addr = if let Some((_, port)) = rest.split_once(',') {
+            format!("tcp:{host},{}", port.trim())
+        } else {
+            let port = super::mssql::mssql_instance_port(host.to_string(), rest.trim().to_string()).await?;
+            format!("tcp:{host},{port}")
+        };
+        *seg = format!("{}={new_addr}", key.trim());
+    }
+    Ok(segments.join(";"))
+}
+
+/// Turn low-level driver failures into something a developer can act on.
+fn friendly_mssql_error(err: &str) -> String {
+    let low = err.to_ascii_lowercase();
+    if low.contains("refused") || low.contains("10061") {
+        return format!(
+            "{err}\n\nNothing is listening on that port. Check that the SQL Server service is running and that TCP/IP is enabled (SQL Server Configuration Manager → Network Configuration → Protocols → TCP/IP), then restart the service."
+        );
+    }
+    if low.contains("timed out") || low.contains("10060") {
+        return format!("{err}\n\nThe server did not answer. A firewall may be blocking the port, or the host name may be wrong.");
+    }
+    if low.contains("login failed") {
+        return format!(
+            "{err}\n\nIf this is a SQL login, the server must run in mixed mode (SQL Server & Windows Authentication). For a domain/local account, tick 'Windows authentication' instead."
+        );
+    }
+    if low.contains("certificate") {
+        return format!("{err}\n\nAdd TrustServerCertificate=true for a self-signed development certificate.");
+    }
+    err.to_string()
+}
+
 async fn mssql_query(conn_str: &str, sql: &str, cap: usize) -> Result<QueryResult, String> {
     use tiberius::{Client, Config};
     use tokio::net::TcpStream;
     use tokio_util::compat::TokioAsyncWriteCompatExt;
 
-    let mut config = Config::from_ado_string(conn_str).map_err(|e| e.to_string())?;
+    // Named instances (localhost\SQLEXPRESS) are resolved to a TCP port first.
+    let resolved = resolve_mssql_instance(conn_str).await?;
+
+    let mut config = Config::from_ado_string(&resolved).map_err(|e| e.to_string())?;
     config.trust_cert(); // dev-friendly: accept self-signed server certs
 
-    // Connect to host:port. Named instances (localhost\SQLEXPRESS) resolve their dynamic
-    // port via SQL Browser — not wired here, so use the instance's actual TCP port instead
-    // (find it in SQL Server Configuration Manager → TCP/IP → IP Addresses → TCP Dynamic Ports).
     let tcp = TcpStream::connect(config.get_addr())
         .await
-        .map_err(|e| format!("Connect failed: {e}"))?;
+        .map_err(|e| friendly_mssql_error(&format!("Connect failed: {e}")))?;
     tcp.set_nodelay(true).ok();
 
     let mut client = Client::connect(config, tcp.compat_write())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| friendly_mssql_error(&e.to_string()))?;
 
     let start = Instant::now();
     let result = client.simple_query(sql).await.map_err(|e| e.to_string())?;
@@ -475,6 +568,40 @@ mod tests {
         assert_eq!(sel.rows[1][2], None);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn named_instance_with_an_explicit_port_drops_the_instance() {
+        // No SQL Browser lookup is needed when the port is already spelled out.
+        let out = tauri::async_runtime::block_on(resolve_mssql_instance(
+            r"Server=DESKTOP-X\SQLEXPRESS,49823;Database=master;User Id=sa;Password=p;",
+        ))
+        .unwrap();
+        assert_eq!(out, "Server=tcp:DESKTOP-X,49823;Database=master;User Id=sa;Password=p;");
+    }
+
+    #[test]
+    fn a_plain_host_is_left_untouched() {
+        let input = "Server=tcp:localhost,1433;Database=master;IntegratedSecurity=SSPI;";
+        let out = tauri::async_runtime::block_on(resolve_mssql_instance(input)).unwrap();
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn data_source_is_recognised_as_a_server_key() {
+        let out = tauri::async_runtime::block_on(resolve_mssql_instance(
+            r"Data Source=HOST\DEV,51000;Integrated Security=True;",
+        ))
+        .unwrap();
+        assert!(out.starts_with("Data Source=tcp:HOST,51000"), "got {out}");
+    }
+
+    #[test]
+    fn friendly_errors_add_guidance() {
+        assert!(friendly_mssql_error("Connect failed: connection refused").contains("TCP/IP"));
+        assert!(friendly_mssql_error("Login failed for user 'sa'").contains("mixed mode"));
+        // An unrecognised error is passed through unchanged.
+        assert_eq!(friendly_mssql_error("boom"), "boom");
     }
 
     #[test]

@@ -11,21 +11,61 @@ pub struct TcpResult {
     pub latency_ms: Option<u128>,
 }
 
+/// Default connect timeout. Short, because the common use is probing localhost, where a
+/// closed port answers immediately and only a firewalled one runs the clock out.
+const DEFAULT_TCP_TIMEOUT_MS: u64 = 1500;
+
 /// Attempt a TCP connection to host:port with a timeout.
+///
+/// Async and off the main thread: a synchronous command blocks Tauri's main thread, which
+/// silently serialized concurrent probes — four "parallel" checks took four timeouts.
 #[tauri::command]
-pub fn tcp_check(host: String, port: u16) -> TcpResult {
+pub async fn tcp_check(host: String, port: u16, timeout_ms: Option<u64>) -> TcpResult {
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_TCP_TIMEOUT_MS));
+    tauri::async_runtime::spawn_blocking(move || tcp_check_blocking(&host, port, timeout))
+        .await
+        .unwrap_or(TcpResult { host: String::new(), port, open: false, latency_ms: None })
+}
+
+fn tcp_check_blocking(host: &str, port: u16, timeout: Duration) -> TcpResult {
     let addr = format!("{host}:{port}");
     let start = Instant::now();
     let resolved = addr.to_socket_addrs().ok().and_then(|mut it| it.next());
     if let Some(sa) = resolved {
-        match TcpStream::connect_timeout(&sa, Duration::from_secs(3)) {
-            Ok(_) => {
-                return TcpResult { host, port, open: true, latency_ms: Some(start.elapsed().as_millis()) };
-            }
-            Err(_) => {}
+        if TcpStream::connect_timeout(&sa, timeout).is_ok() {
+            return TcpResult {
+                host: host.to_string(),
+                port,
+                open: true,
+                latency_ms: Some(start.elapsed().as_millis()),
+            };
         }
     }
-    TcpResult { host, port, open: false, latency_ms: None }
+    TcpResult { host: host.to_string(), port, open: false, latency_ms: None }
+}
+
+#[cfg(test)]
+mod tcp_tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_local_port_is_reported_shut_and_bounded_by_the_timeout() {
+        let timeout = Duration::from_millis(300);
+        let start = Instant::now();
+        // Port 1 is not something a developer machine listens on. Windows may drop the SYN
+        // rather than refuse it, so the timeout — not a fast refusal — is what bounds this.
+        let r = tcp_check_blocking("127.0.0.1", 1, timeout);
+        assert!(!r.open);
+        assert!(r.latency_ms.is_none());
+        assert!(start.elapsed() < timeout * 4, "took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn an_unresolvable_host_is_reported_shut() {
+        let r = tcp_check_blocking("no-such-host.invalid", 80, Duration::from_millis(200));
+        assert!(!r.open);
+        assert_eq!(r.port, 80);
+    }
 }
 
 #[derive(Serialize)]

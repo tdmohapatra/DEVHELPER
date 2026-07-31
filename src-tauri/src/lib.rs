@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{db, docker, files, network, ports, process, redis, sysprobe, system, toolchain};
+use commands::{db, docker, files, mssql, network, ports, process, redis, sysprobe, system, toolchain, ws};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
@@ -30,6 +30,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        // Live WebSocket connections, owned by the Rust side and addressed by id.
+        .manage(ws::WsRegistry::default())
         .setup(move |app| {
             // System tray with a quick-actions menu.
             let open = MenuItem::with_id(app, "open", "Open DevHelper", true, None::<&str>)?;
@@ -69,6 +71,13 @@ pub fn run() {
             db::db_test,
             db::db_query,
             db::db_objects,
+            mssql::mssql_instances,
+            mssql::mssql_instance_port,
+            ws::ws_connect,
+            ws::ws_send,
+            ws::ws_ping,
+            ws::ws_close,
+            ws::ws_list,
             toolchain::toolchain_probe,
             toolchain::toolchain_install,
             toolchain::toolchain_winget_available,
