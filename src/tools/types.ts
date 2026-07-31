@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 /** Sidebar categories. Order here drives sidebar order. */
 export const CATEGORIES = [
   { id: "quick", label: "Quick Tools", icon: "Zap" },
+  { id: "learn", label: "Learn & Revise", icon: "GraduationCap" },
   { id: "data", label: "Data & Code", icon: "Braces" },
   { id: "api", label: "API", icon: "Globe" },
   { id: "security", label: "Security", icon: "ShieldCheck" },

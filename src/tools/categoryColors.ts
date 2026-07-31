@@ -12,6 +12,7 @@ export interface CategoryColor {
 /** One accent color per category, used to color-code icons, badges and active nav state. */
 export const CATEGORY_COLORS: Record<CategoryId, CategoryColor> = {
   quick: { text: "text-amber-500", bg: "bg-amber-500/10", bgSolid: "bg-amber-500", border: "border-amber-500/30", hoverBorder: "hover:border-amber-500/50", ring: "ring-amber-500/30" },
+  learn: { text: "text-purple-500", bg: "bg-purple-500/10", bgSolid: "bg-purple-500", border: "border-purple-500/30", hoverBorder: "hover:border-purple-500/50", ring: "ring-purple-500/30" },
   data: { text: "text-blue-500", bg: "bg-blue-500/10", bgSolid: "bg-blue-500", border: "border-blue-500/30", hoverBorder: "hover:border-blue-500/50", ring: "ring-blue-500/30" },
   api: { text: "text-sky-500", bg: "bg-sky-500/10", bgSolid: "bg-sky-500", border: "border-sky-500/30", hoverBorder: "hover:border-sky-500/50", ring: "ring-sky-500/30" },
   security: { text: "text-red-500", bg: "bg-red-500/10", bgSolid: "bg-red-500", border: "border-red-500/30", hoverBorder: "hover:border-red-500/50", ring: "ring-red-500/30" },

@@ -1,5 +1,6 @@
 import {
   Zap,
+  GraduationCap,
   Braces,
   Globe,
   ShieldCheck,
@@ -20,6 +21,7 @@ import type { CategoryId } from "./types";
 
 export const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
   quick: Zap,
+  learn: GraduationCap,
   data: Braces,
   api: Globe,
   security: ShieldCheck,
