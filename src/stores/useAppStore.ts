@@ -17,6 +17,8 @@ interface AppState {
   recent: string[]; // most-recent first
   view: View;
   sidebarCollapsed: boolean;
+  /** Activity log dock: hidden entirely, collapsed to its status bar, or open. */
+  logDock: "hidden" | "bar" | "open";
 
   toggleTheme: () => void;
   setTheme: (t: Theme) => void;
@@ -25,6 +27,9 @@ interface AppState {
   openTool: (toolId: string) => void;
   openView: (view: View) => void;
   toggleSidebar: () => void;
+  setLogDock: (state: AppState["logDock"]) => void;
+  /** Open the dock if it is not already, otherwise collapse it back to the bar. */
+  toggleLogDock: () => void;
 }
 
 const RECENT_LIMIT = 12;
@@ -61,6 +66,7 @@ export const useAppStore = create<AppState>()(
       recent: [],
       view: { kind: "dashboard" },
       sidebarCollapsed: false,
+      logDock: "bar",
 
       toggleTheme: () => {
         const next = get().theme === "dark" ? "light" : "dark";
@@ -89,10 +95,18 @@ export const useAppStore = create<AppState>()(
         set({ view });
       },
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setLogDock: (logDock) => set({ logDock }),
+      toggleLogDock: () => set((s) => ({ logDock: s.logDock === "open" ? "bar" : "open" })),
     }),
     {
       name: "devhelper-app",
-      partialize: (s) => ({ theme: s.theme, favorites: s.favorites, recent: s.recent, sidebarCollapsed: s.sidebarCollapsed }),
+      partialize: (s) => ({
+        theme: s.theme,
+        favorites: s.favorites,
+        recent: s.recent,
+        sidebarCollapsed: s.sidebarCollapsed,
+        logDock: s.logDock,
+      }),
       onRehydrateStorage: () => (state) => {
         // Apply persisted theme to the <html> element on load.
         if (state) document.documentElement.classList.toggle("dark", state.theme === "dark");

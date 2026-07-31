@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from "react";
 import { AlertTriangle, RotateCcw, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { log } from "@/lib/logBus";
 
 interface Props {
   children: ReactNode;
@@ -21,6 +22,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
+  }
+
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+    // The panel below shows only the message; the log keeps the stack for copying.
+    log.error("app:render", error.message, error.stack ?? info.componentStack ?? undefined);
   }
 
   render() {
