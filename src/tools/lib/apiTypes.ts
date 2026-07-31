@@ -1,7 +1,7 @@
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
-export type BodyType = "none" | "json" | "xml" | "form-data" | "x-www-form-urlencoded" | "raw";
+export type BodyType = "none" | "json" | "xml" | "form-data" | "x-www-form-urlencoded" | "raw" | "graphql";
 
 export interface KeyValue {
   id: string;
@@ -10,12 +10,51 @@ export interface KeyValue {
   enabled: boolean;
 }
 
-export type AuthType = "none" | "bearer" | "basic";
+export type AuthType = "none" | "bearer" | "basic" | "apikey" | "oauth2";
 export interface AuthConfig {
   type: AuthType;
   token?: string; // bearer
   username?: string; // basic
   password?: string; // basic
+  /** API key: the header or query parameter name, e.g. `X-API-Key`. */
+  apiKeyName?: string;
+  apiKeyValue?: string;
+  apiKeyIn?: "header" | "query";
+  /** OAuth 2.0 client credentials. The fetched token is session-only, never persisted. */
+  tokenUrl?: string;
+  clientId?: string;
+  clientSecret?: string;
+  scope?: string;
+  /** Where the client credentials go: an Authorization header or the form body. */
+  clientAuth?: "header" | "body";
+}
+
+/** Per-request transport settings — Postman's request-level Settings tab. */
+export interface RequestSettings {
+  /** Abort after this many milliseconds. 0 or undefined means no limit. */
+  timeoutMs?: number;
+  /** Follow 3xx responses. Off shows the redirect itself, which is often what you want. */
+  followRedirects?: boolean;
+}
+
+/** GraphQL requests keep the query and variables apart, and combine them at send time. */
+export interface GraphQlBody {
+  query: string;
+  variables: string;
+}
+
+/** A check run against the response — the "Tests" tab, without a scripting engine. */
+export type AssertionKind = "status" | "jsonPath" | "header" | "bodyContains" | "responseTime";
+export type AssertionOp = "equals" | "notEquals" | "contains" | "lessThan" | "greaterThan" | "exists";
+
+export interface Assertion {
+  id: string;
+  enabled: boolean;
+  kind: AssertionKind;
+  /** JSONPath expression, header name — unused for status and responseTime. */
+  target?: string;
+  op: AssertionOp;
+  expected?: string;
 }
 
 export interface ApiRequest {
@@ -28,6 +67,11 @@ export interface ApiRequest {
   bodyType: BodyType;
   body: string;
   auth: AuthConfig;
+  /** Response checks. Optional so requests saved before this existed still load. */
+  assertions?: Assertion[];
+  /** GraphQL variables, kept apart from the query which lives in `body`. */
+  graphqlVariables?: string;
+  settings?: RequestSettings;
 }
 
 export interface ApiResponse {
@@ -77,5 +121,6 @@ export function emptyRequest(id: string): ApiRequest {
     bodyType: "none",
     body: "",
     auth: { type: "none" },
+    assertions: [],
   };
 }
