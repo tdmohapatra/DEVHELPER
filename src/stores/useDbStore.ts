@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DbConnection } from "@/tools/lib/dbTypes";
+import {
+  findCredential,
+  forgetCredential,
+  rememberCredential,
+  type Credential,
+  type CredentialVault,
+} from "@/tools/lib/credentials";
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.floor(performance.now())));
 
@@ -24,6 +31,11 @@ interface DbState {
    * app closes. Secure OS credential storage (DPAPI / Credential Manager) is a later step.
    */
   passwords: Record<string, string>;
+  /**
+   * Verified passwords keyed by server account (`engine://user@host:port`), so one entry
+   * unlocks every connection to that server. Memory only, exactly like `passwords`.
+   */
+  credentials: CredentialVault;
 
   upsert: (c: Omit<DbConnection, "id"> & { id?: string }) => string;
   remove: (id: string) => void;
@@ -32,6 +44,14 @@ interface DbState {
   setPassword: (id: string, password: string) => void;
   getPassword: (id: string) => string;
   clearPasswords: () => void;
+  /** Record a password that just opened a connection, and keep it on that connection. */
+  rememberCredential: (conn: DbConnection, password: string) => void;
+  /** Password already verified for this connection's server account, if any. */
+  credentialFor: (conn: DbConnection) => Credential | undefined;
+  /** Apply a stored credential to a connection. Returns true when one was found. */
+  applyCredential: (conn: DbConnection) => boolean;
+  forgetCredential: (key: string) => void;
+  clearCredentials: () => void;
   pushHistory: (e: Omit<DbHistoryEntry, "id" | "at">) => void;
   clearHistory: (connId: string) => void;
   importConnections: (items: DbConnection[]) => number;
@@ -44,6 +64,7 @@ export const useDbStore = create<DbState>()(
       activeId: null,
       history: [],
       passwords: {},
+      credentials: {},
 
       upsert: (c) => {
         const id = c.id ?? uid();
@@ -76,7 +97,22 @@ export const useDbStore = create<DbState>()(
       setActive: (id) => set({ activeId: id }),
       setPassword: (id, password) => set((s) => ({ passwords: { ...s.passwords, [id]: password } })),
       getPassword: (id) => get().passwords[id] ?? "",
-      clearPasswords: () => set({ passwords: {} }),
+      clearPasswords: () => set({ passwords: {}, credentials: {} }),
+
+      rememberCredential: (conn, password) =>
+        set((s) => ({
+          passwords: { ...s.passwords, [conn.id]: password },
+          credentials: rememberCredential(s.credentials, conn, password, Date.now()),
+        })),
+      credentialFor: (conn) => findCredential(get().credentials, conn),
+      applyCredential: (conn) => {
+        const cred = findCredential(get().credentials, conn);
+        if (!cred) return false;
+        set((s) => ({ passwords: { ...s.passwords, [conn.id]: cred.password } }));
+        return true;
+      },
+      forgetCredential: (key) => set((s) => ({ credentials: forgetCredential(s.credentials, key) })),
+      clearCredentials: () => set({ credentials: {} }),
       pushHistory: (e) =>
         set((s) => ({
           history: [{ ...e, id: uid(), at: Date.now() }, ...s.history].slice(0, HISTORY_LIMIT),
@@ -90,8 +126,9 @@ export const useDbStore = create<DbState>()(
     }),
     {
       name: "devhelper-db",
-      // Persist connection metadata + query history. Passwords, the raw connection string
-      // (may contain a password), and the active selection stay in memory only.
+      // Persist connection metadata + query history. Passwords, the credential vault, the
+      // raw connection string (may contain a password), and the active selection stay in
+      // memory only.
       partialize: (s) => ({
         connections: s.connections.map(({ rawConnString: _raw, ...c }) => c),
         history: s.history,

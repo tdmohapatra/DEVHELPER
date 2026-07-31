@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Users, Lock, Clock, HardDrive, Ban } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,14 @@ export function DbMonitor({ engine, runSql }: { engine: DbEngine; runSql: RunSql
     ]);
   }, [engine, runSql]);
 
-  useEffect(() => { load(); }, [load]);
+  // React 18 StrictMode runs effects twice in development. Each run opened a second set of
+  // real database connections, so the load is latched to one per engine/runner.
+  const loadedFor = useRef<RunSql | null>(null);
+  useEffect(() => {
+    if (loadedFor.current === runSql) return;
+    loadedFor.current = runSql;
+    load();
+  }, [load, runSql]);
 
   const kill = async () => {
     const sql = killQuery(engine, killId);

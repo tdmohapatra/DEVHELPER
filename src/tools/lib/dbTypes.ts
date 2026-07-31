@@ -81,9 +81,13 @@ export function buildConnString(conn: DbConnection, password: string): string {
     // user/password@//host:port/service — parsed by the native layer.
     return `${conn.user || ""}/${password || ""}@//${host}:${port}/${db}`;
   }
-  // mssql — tiberius ADO connection string. Always host,port (named instances must supply
-  // the instance's actual TCP port; SQL Browser auto-resolution is not wired).
-  const parts = [`Server=tcp:${host},${port}`, `Database=${db}`];
+  // mssql — tiberius ADO connection string. A host written as `HOST\INSTANCE` is passed
+  // through with its backslash intact: the native layer resolves the instance's dynamic
+  // TCP port via the SQL Browser. An explicit port always wins.
+  const server = host.includes("\\")
+    ? `Server=${host}${conn.port ? `,${conn.port}` : ""}`
+    : `Server=tcp:${host},${port}`;
+  const parts = [server, `Database=${db}`];
   if (conn.integratedSecurity) {
     parts.push("IntegratedSecurity=SSPI");
   } else {
@@ -93,10 +97,59 @@ export function buildConnString(conn: DbConnection, password: string): string {
   return parts.join(";") + ";";
 }
 
+/**
+ * Fields a connection is missing before it can even be attempted.
+ *
+ * Drivers report these as opaque failures — tokio-postgres answers a userless URL with
+ * "invalid configuration" — so they are caught here and named instead.
+ */
+export function connectionProblems(conn: DbConnection): string[] {
+  const problems: string[] = [];
+  if (conn.usesRawConnString) {
+    if (!conn.rawConnString?.trim()) problems.push("Connection string is empty.");
+    return problems;
+  }
+  if (conn.engine === "sqlite") {
+    if (!conn.filePath?.trim()) problems.push("Database file path is required.");
+    return problems;
+  }
+  if (!conn.host?.trim()) problems.push("Host is required.");
+  if (conn.engine !== "mssql" && !conn.user?.trim()) {
+    problems.push(`User is required for ${conn.engine === "postgres" ? "PostgreSQL" : conn.engine}.`);
+  }
+  if (conn.engine === "mssql" && !conn.integratedSecurity && !conn.user?.trim()) {
+    problems.push("User is required unless Windows authentication is used.");
+  }
+  if ((conn.engine === "postgres" || conn.engine === "mysql") && !conn.database?.trim()) {
+    problems.push("Database is required.");
+  }
+  return problems;
+}
+
+const ENV_WORDS = /^(local|localhost|dev|development|qa|test|testing|uat|stage|staging|prod|production|sandbox|demo)\b/i;
+
+/**
+ * Does this value look like a password typed into a field that gets persisted?
+ *
+ * Environment, Name and Database are all written to disk. A password landing in one of
+ * them is stored in clear text, so it is worth flagging even at the cost of a false
+ * positive on an unusual tag.
+ */
+export function looksLikeSecret(value?: string): boolean {
+  const v = (value ?? "").trim();
+  if (v.length < 8 || ENV_WORDS.test(v)) return false;
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(v)).length;
+  return classes >= 3;
+}
+
 /** Short human label for a connection's target, safe to show in UI (no secrets). */
 export function connTarget(conn: DbConnection): string {
   if (conn.engine === "sqlite") return conn.filePath || "(no file)";
-  return `${conn.host || "localhost"}:${conn.port || DEFAULT_PORTS[conn.engine] || "?"}/${conn.database || ""}`;
+  const host = conn.host || "localhost";
+  // A named instance without an explicit port resolves at connect time — showing the
+  // default 1433 there would be a lie.
+  if (host.includes("\\") && !conn.port) return `${host}/${conn.database || ""}`;
+  return `${host}:${conn.port || DEFAULT_PORTS[conn.engine] || "?"}/${conn.database || ""}`;
 }
 
 /** Serialize connections for export — strips the session-only raw string (and never had passwords). */

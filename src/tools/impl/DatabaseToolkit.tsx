@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Database as DbIcon,
   Plus,
@@ -18,6 +18,8 @@ import {
   Circle,
   Download,
   Upload,
+  KeyRound,
+  X,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -27,8 +29,10 @@ import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
 import { AddToDebug } from "@/components/AddToDebug";
 import { NativeNotice } from "@/components/NativeNotice";
+import { Tips } from "@/components/Tips";
 import { toast } from "@/components/ui/toast";
 import { invokeNative, isTauri } from "@/lib/platform";
+import { log } from "@/lib/logBus";
 import { cn } from "@/lib/utils";
 import { useDbStore } from "@/stores/useDbStore";
 import { useApiStore } from "@/stores/useApiStore";
@@ -36,7 +40,9 @@ import {
   DB_ENGINES,
   DEFAULT_PORTS,
   buildConnString,
+  connectionProblems,
   connTarget,
+  looksLikeSecret,
   dbConnectionFromEnvRef,
   serializeConnections,
   parseConnectionsFile,
@@ -45,6 +51,14 @@ import {
   type DbObject,
   type QueryResult,
 } from "@/tools/lib/dbTypes";
+import {
+  parseMssqlConnString,
+  formatServerAddress,
+  explainMssqlError,
+  type MssqlInstance,
+} from "@/tools/lib/mssqlConn";
+import { serviceNameFor } from "@/lib/tips";
+import { credentialKey, credentialLabel, findCredential } from "@/tools/lib/credentials";
 import { analyzeSql, isWriteSql, highestRisk } from "@/tools/lib/sqlSafety";
 import { DbObjectDetails } from "@/tools/impl/DbObjectDetails";
 import { DbMonitor } from "@/tools/impl/DbMonitor";
@@ -72,8 +86,28 @@ const RAW_HINT: Record<DbEngine, string> = {
   sqlite: "C:\\path\\to\\app.db",
 };
 
+/** Conventional local defaults, so a detected server produces a connection that can actually open. */
+const ENGINE_DEFAULTS: Record<DbEngine, { user?: string; database?: string }> = {
+  postgres: { user: "postgres", database: "postgres" },
+  mysql: { user: "root", database: "mysql" },
+  mssql: { database: "master" },
+  oracle: { user: "system", database: "XEPDB1" },
+  sqlite: {},
+};
+
 interface DetectProbe { engine: DbEngine; port: number; proc: string }
-type DetectRow = DetectProbe & { open: boolean; running: boolean };
+type DetectRow = DetectProbe & {
+  open: boolean;
+  running: boolean;
+  /** SQL Server only: the named instance this row stands for. */
+  instance?: string;
+  /** Overrides the engine label in the list. */
+  label?: string;
+  /** SQL Server only: false when the TCP/IP protocol is switched off. */
+  tcpEnabled?: boolean;
+  /** SQL Server only: registry name, needed by the fix command. */
+  internalName?: string;
+};
 
 interface ConnStatus { state: "unknown" | "ok" | "fail"; version?: string; error?: string }
 
@@ -103,6 +137,10 @@ export function DatabaseToolkit() {
   const duplicate = useDbStore((s) => s.duplicate);
   const setPassword = useDbStore((s) => s.setPassword);
   const passwords = useDbStore((s) => s.passwords);
+  const credentials = useDbStore((s) => s.credentials);
+  const rememberCredential = useDbStore((s) => s.rememberCredential);
+  const applyCredential = useDbStore((s) => s.applyCredential);
+  const forgetCredential = useDbStore((s) => s.forgetCredential);
   const pushHistory = useDbStore((s) => s.pushHistory);
   const history = useDbStore((s) => s.history);
   const clearHistory = useDbStore((s) => s.clearHistory);
@@ -184,24 +222,91 @@ export function DatabaseToolkit() {
           return { ...p, open: tcp.open, running };
         }),
       );
-      setDetected(rows);
+      setDetected(await expandMssqlInstances(rows));
     } finally {
       setDetecting(false);
     }
   }
 
+  /**
+   * Replace the fixed 1433 row with one row per real instance. A local SQL Server is
+   * usually a named instance on a dynamic port, where probing 1433 reports "process up,
+   * port closed" and tells the user nothing about where to connect.
+   */
+  async function expandMssqlInstances(rows: DetectRow[]): Promise<DetectRow[]> {
+    const base = rows.find((r) => r.engine === "mssql");
+    if (!base || (!base.running && !base.open)) return rows;
+
+    const instances = await invokeNative<MssqlInstance[]>("mssql_instances", { host: "localhost" }).catch((e) => {
+      // Not fatal — fall back to the fixed-port row, but say why in the log.
+      log.warn("db:detect", `Instance discovery failed: ${e instanceof Error ? e.message : String(e)}`);
+      return [] as MssqlInstance[];
+    });
+    if (instances.length === 0) {
+      log.warn("db:detect", "No SQL Server instances reported; showing the default port probe only.");
+      return rows;
+    }
+    log.success(
+      "db:detect",
+      `Found ${instances.length} SQL Server instance(s)`,
+      instances
+        .map((i) => {
+          const tcp = i.tcpEnabled === false ? "TCP/IP DISABLED" : i.tcpEnabled ? "tcp on" : "tcp unknown";
+          return `${i.instance}:${i.tcpPort ?? "no port"} (${tcp}${i.internalName ? `, ${i.internalName}` : ""})`;
+        })
+        .join(", "),
+    );
+
+    const expanded: DetectRow[] = await Promise.all(
+      instances.map(async (i) => {
+        const port = i.tcpPort ?? base.port;
+        const tcp = await invokeNative<{ open: boolean }>("tcp_check", { host: "localhost", port }).catch(() => ({
+          open: false,
+        }));
+        const isDefault = i.instance.toLowerCase() === "mssqlserver";
+        return {
+          engine: "mssql" as DbEngine,
+          proc: base.proc,
+          port,
+          open: tcp.open,
+          running: true,
+          instance: isDefault ? undefined : i.instance,
+          label: isDefault ? "SQL Server" : `SQL Server \\${i.instance}`,
+          tcpEnabled: i.tcpEnabled ?? undefined,
+          internalName: i.internalName ?? undefined,
+        };
+      }),
+    );
+
+    return rows.flatMap((r) => (r.engine === "mssql" ? expanded : [r]));
+  }
+
   function createFromDetected(p: DetectRow) {
     const label = DB_ENGINES.find((e) => e.id === p.engine)?.label ?? p.engine;
+    const defaults = ENGINE_DEFAULTS[p.engine];
     setEditing({
       ...blankConnection(),
       engine: p.engine,
-      name: `Local ${label}`,
-      host: "localhost",
+      name: p.instance ? `Local SQL Server (${p.instance})` : `Local ${label}`,
+      host: p.instance ? `localhost\\${p.instance}` : "localhost",
       port: p.port,
+      // Without a user and database, PostgreSQL and MySQL reject the connection string
+      // outright ("invalid configuration") — prefill the conventional local values.
+      database: defaults.database,
+      user: defaults.user,
       integratedSecurity: p.engine === "mssql",
       trustServerCertificate: true,
     });
   }
+
+  // A password verified against one database on a server opens the others too, so it is
+  // applied to the active connection without asking again.
+  const reused = active ? findCredential(credentials, active) : undefined;
+  useEffect(() => {
+    if (active && !passwords[active.id] && applyCredential(active)) {
+      log.info("db:credentials", `Reused the saved password for ${credentialKey(active)}`);
+    }
+  }, [active, passwords, applyCredential]);
 
   const engineReady = (e: DbEngine) => DB_ENGINES.find((x) => x.id === e)?.ready ?? false;
   const needsPassword =
@@ -214,14 +319,33 @@ export function DatabaseToolkit() {
 
   async function testConn(conn: DbConnection) {
     if (!isTauri()) return;
+    // Catch missing fields here: the drivers report them as unreadable configuration errors.
+    const problems = connectionProblems(conn);
+    if (problems.length > 0) {
+      const msg = `This connection is incomplete:\n${problems.map((p) => `• ${p}`).join("\n")}`;
+      mark(conn.id, { state: "fail", error: msg });
+      setError(msg);
+      log.warn("db:test", "Blocked an incomplete connection", problems.join(" "));
+      return;
+    }
     setBusy("test");
     setError("");
     try {
-      const version = await invokeNative<string>("db_test", { engine: conn.engine, connStr: buildConnString(conn, passwords[conn.id] ?? "") });
+      const password = passwords[conn.id] ?? "";
+      const version = await invokeNative<string>("db_test", { engine: conn.engine, connStr: buildConnString(conn, password) });
       mark(conn.id, { state: "ok", version });
+      // Only a password that actually opened a connection is worth keeping.
+      if (password) {
+        rememberCredential(conn, password);
+        const key = credentialKey(conn);
+        if (key) log.success("db:credentials", `Remembered the password for ${key} (this session only)`);
+      }
       toast.success(`Connected — ${version.slice(0, 60)}`);
     } catch (e) {
-      const msg = (e as Error).message;
+      const raw = (e as Error).message;
+      // SQL Server failures are cryptic; add the fix when the cause is recognisable.
+      const hint = conn.engine === "mssql" ? explainMssqlError(raw) : null;
+      const msg = hint ? `${raw}\n\n${hint}` : raw;
       mark(conn.id, { state: "fail", error: msg });
       setError(msg);
       toast.error("Connection failed");
@@ -370,15 +494,21 @@ export function DatabaseToolkit() {
               <div className="mb-1 text-[11px] font-medium text-muted-foreground">Local servers</div>
               <div className="flex flex-col gap-1">
                 {detected.map((d) => {
-                  const label = DB_ENGINES.find((e) => e.id === d.engine)?.label ?? d.engine;
+                  const label = d.label ?? DB_ENGINES.find((e) => e.id === d.engine)?.label ?? d.engine;
                   const found = d.open || d.running;
                   return (
-                    <div key={d.engine} className="flex items-center gap-1.5 text-[11px]">
+                    <div key={`${d.engine}:${d.instance ?? ""}:${d.port}`} className="flex items-center gap-1.5 text-[11px]">
                       <span className={cn("size-2 rounded-full", d.open ? "bg-success" : d.running ? "bg-warning" : "bg-muted-foreground/40")} />
                       <span className="truncate">{label}</span>
                       <span className="text-muted-foreground">:{d.port}</span>
                       <span className="ml-auto text-muted-foreground">
-                        {d.open ? "port open" : d.running ? "process up" : "not found"}
+                        {d.tcpEnabled === false
+                          ? "TCP/IP off"
+                          : d.open
+                            ? "port open"
+                            : d.running
+                              ? "process up"
+                              : "not found"}
                       </span>
                       {found && d.engine !== "oracle" && (
                         <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => createFromDetected(d)}>Use</Button>
@@ -387,6 +517,26 @@ export function DatabaseToolkit() {
                   );
                 })}
                 <p className="mt-1 text-[10px] text-muted-foreground">Green = port reachable · amber = process running but port closed (check TCP/IP + firewall).</p>
+                {detected.some((d) => d.tcpEnabled === false) && (
+                  <div className="mt-1 flex flex-col gap-1">
+                    <p className="text-[10px] text-destructive">
+                      SQL Server is running with TCP/IP switched off. SSMS still works over Shared Memory, but no TCP
+                      driver — including this one — can connect until it is enabled.
+                    </p>
+                    <Tips
+                      error="10061"
+                      domain="mssql"
+                      context={(() => {
+                        const off = detected.find((d) => d.tcpEnabled === false);
+                        return {
+                          internalName: off?.internalName,
+                          serviceName: serviceNameFor(off?.instance),
+                          host: "localhost",
+                        };
+                      })()}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -434,8 +584,10 @@ export function DatabaseToolkit() {
             <ConnectionForm
               initial={editing}
               onCancel={() => setEditing(null)}
-              onSave={(conn) => {
+              onSave={(conn, password) => {
                 const id = upsert(conn);
+                // A password pasted inside a connection string stays session-only.
+                if (password) setPassword(id, password);
                 setActive(id);
                 setEditing(null);
                 toast.success("Connection saved");
@@ -454,6 +606,23 @@ export function DatabaseToolkit() {
                 <StatusBadge status={activeStatus} />
                 {active.safeMode && <Badge variant="warning" className="gap-1"><ShieldAlert className="size-3" /> Safe mode</Badge>}
                 {!engineReady(active.engine) && <Badge variant="warning">Not supported yet</Badge>}
+                {reused && passwords[active.id] && (
+                  <Badge variant="secondary" className="gap-1" title={`Verified ${new Date(reused.verifiedAt).toLocaleTimeString()} — held in memory only`}>
+                    <KeyRound className="size-3" /> {credentialLabel(reused)}
+                    <button
+                      className="ml-1 text-muted-foreground hover:text-destructive"
+                      title="Forget this password"
+                      aria-label="Forget this password"
+                      onClick={() => {
+                        forgetCredential(reused.key);
+                        setPassword(active.id, "");
+                        log.info("db:credentials", `Forgot the password for ${reused.key}`);
+                      }}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </Badge>
+                )}
                 <div className="ml-auto flex gap-1">
                   <Button size="sm" variant="outline" disabled={!isTauri() || busy !== null || needsPassword} onClick={() => testConn(active)}>
                     <Plug /> Test
@@ -498,7 +667,7 @@ export function DatabaseToolkit() {
 
               {error && (
                 <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-                  <span className="min-w-0 flex-1 break-words">{error}</span>
+                  <span className="min-w-0 flex-1 whitespace-pre-line break-words">{error}</span>
                   <AddToDebug
                     variant="ghost"
                     label="Debug"
@@ -512,6 +681,20 @@ export function DatabaseToolkit() {
                     })}
                   />
                 </div>
+              )}
+
+              {error && (
+                <Tips
+                  error={error}
+                  domain={active.engine}
+                  compact
+                  context={{
+                    host: (active.host || "localhost").split("\\")[0],
+                    port: active.port ?? DEFAULT_PORTS[active.engine],
+                    target: active.database,
+                    serviceName: serviceNameFor(active.host?.split("\\")[1]),
+                  }}
+                />
               )}
 
               {/* Tabs */}
@@ -680,10 +863,24 @@ function PasswordUnlock({ onSubmit }: { onSubmit: (pw: string) => void }) {
   );
 }
 
-function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; onSave: (c: DbConnection) => void; onCancel: () => void }) {
+function ConnectionForm({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: DbConnection;
+  onSave: (c: DbConnection, password?: string) => void;
+  onCancel: () => void;
+}) {
   const [c, setC] = useState<DbConnection>(initial);
+  const [pastedPassword, setPastedPassword] = useState<string | undefined>();
   const patch = (p: Partial<DbConnection>) => setC((cur) => ({ ...cur, ...p }));
   const isFile = c.engine === "sqlite";
+
+  // A password already proven for this server account covers this connection too, so the
+  // form says so instead of demanding it again.
+  const credentials = useDbStore((s) => s.credentials);
+  const knownCredential = findCredential(credentials, c);
 
   return (
     <div className="max-w-lg rounded-lg border border-border p-4">
@@ -727,15 +924,32 @@ function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; 
               </Field>
             ) : (
               <>
+                {c.engine === "mssql" && (
+                  <MssqlQuickConnect
+                    conn={c}
+                    onFill={(fields, password) => {
+                      patch(fields);
+                      if (password !== undefined) setPastedPassword(password);
+                    }}
+                  />
+                )}
+
                 <div className="grid grid-cols-[1fr_120px] gap-2">
                   <Field label="Host"><Input value={c.host ?? ""} onChange={(e) => patch({ host: e.target.value })} placeholder="localhost" /></Field>
-                  <Field label="Port"><Input type="number" value={c.port ?? 0} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
+                  <Field label="Port">
+                    <Input
+                      type="number"
+                      value={c.port ?? ""}
+                      placeholder={c.engine === "mssql" ? "auto" : ""}
+                      onChange={(e) => patch({ port: e.target.value === "" ? undefined : Number(e.target.value) })}
+                    />
+                  </Field>
                 </div>
                 {c.engine === "mssql" && (
                   <Hint>
-                    Local default port is <b>1433</b>. A named instance like <b>SQLEXPRESS</b> uses a dynamic port —
-                    find it in SQL Server Configuration Manager → Protocols → TCP/IP → IP Addresses → TCP Dynamic Ports,
-                    and enter that port here. Make sure TCP/IP is <b>enabled</b> for the instance.
+                    Write a named instance straight into Host — <span className="mono">HOST\SQLEXPRESS</span> — and leave
+                    Port empty; its dynamic port is resolved through the SQL Browser when you connect. A plain host uses{" "}
+                    <b>1433</b> unless you set a port. TCP/IP must be <b>enabled</b> for the instance.
                   </Hint>
                 )}
                 <Field label="Database"><Input value={c.database ?? ""} onChange={(e) => patch({ database: e.target.value })} placeholder={c.engine === "mssql" ? "master" : ""} /></Field>
@@ -748,10 +962,33 @@ function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; 
                 )}
 
                 {!(c.engine === "mssql" && c.integratedSecurity) && (
-                  <Field label="User">
-                    <Input value={c.user ?? ""} onChange={(e) => patch({ user: e.target.value })} placeholder={c.engine === "mssql" ? "sa" : ""} />
-                    {c.engine === "mssql" && <Hint>SQL login. Requires the server to allow <b>SQL Server &amp; Windows Authentication mode</b> (mixed mode). If only Windows auth is enabled, tick the box above instead.</Hint>}
-                  </Field>
+                  <>
+                    <Field label="User">
+                      <Input value={c.user ?? ""} onChange={(e) => patch({ user: e.target.value })} placeholder={c.engine === "mssql" ? "sa" : ""} />
+                      {c.engine === "mssql" && <Hint>SQL login. Requires the server to allow <b>SQL Server &amp; Windows Authentication mode</b> (mixed mode). If only Windows auth is enabled, tick the box above instead.</Hint>}
+                    </Field>
+                    {/* Without a field here, users put the password in whatever box looks free —
+                        and every other field on this form IS written to disk. */}
+                    <Field label="Password (this session only)">
+                      <Input
+                        type="password"
+                        autoComplete="off"
+                        value={pastedPassword ?? ""}
+                        onChange={(e) => setPastedPassword(e.target.value)}
+                        placeholder={knownCredential ? "Using the stored password — type to override" : "Kept in memory, never written to disk"}
+                      />
+                      {knownCredential && !pastedPassword && (
+                        <p className="flex items-center gap-1 text-[11px] text-success">
+                          <KeyRound className="size-3" />
+                          A verified password for {credentialLabel(knownCredential)} is already in memory and will be used.
+                        </p>
+                      )}
+                      <Hint>
+                        Held in memory until the app closes. Every other field on this form <b>is</b> saved to disk —
+                        never type a password into Name, Environment or Database.
+                      </Hint>
+                    </Field>
+                  </>
                 )}
 
                 {c.engine === "mssql" && (
@@ -766,7 +1003,16 @@ function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; 
         )}
 
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Environment"><Input value={c.environment ?? ""} onChange={(e) => patch({ environment: e.target.value })} placeholder="DEV / QA / PROD" /></Field>
+          <Field label="Environment">
+            <Input value={c.environment ?? ""} onChange={(e) => patch({ environment: e.target.value })} placeholder="DEV / QA / PROD" />
+            {looksLikeSecret(c.environment) && (
+              <p className="flex items-start gap-1 text-[11px] text-destructive">
+                <TriangleAlert className="mt-0.5 size-3 shrink-0" />
+                This looks like a password. Environment is a label (DEV / QA / PROD) and <b>is saved to disk</b> — put
+                credentials in the Password field above.
+              </p>
+            )}
+          </Field>
           <div className="flex flex-col justify-end gap-2 pb-1">
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!c.isProduction} onChange={(e) => patch({ isProduction: e.target.checked })} /> Production</label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!c.safeMode} onChange={(e) => patch({ safeMode: e.target.checked })} /> Safe mode (block writes)</label>
@@ -776,10 +1022,156 @@ function ConnectionForm({ initial, onSave, onCancel }: { initial: DbConnection; 
         <p className="text-[11px] text-muted-foreground">Passwords are entered per session and never stored on disk.</p>
 
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => onSave(c)} disabled={!c.name.trim()}>Save</Button>
+          <Button size="sm" onClick={() => onSave(c, pastedPassword)} disabled={!c.name.trim()}>Save</Button>
           <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The two things that actually block a SQL Server connection: not knowing which instances
+ * exist, and having a connection string rather than fields. Both are handled here.
+ */
+function MssqlQuickConnect({
+  conn,
+  onFill,
+}: {
+  conn: DbConnection;
+  onFill: (fields: Partial<DbConnection>, password?: string) => void;
+}) {
+  const [instances, setInstances] = useState<MssqlInstance[] | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [paste, setPaste] = useState("");
+  const [notes, setNotes] = useState<string[]>([]);
+  const [showPaste, setShowPaste] = useState(false);
+
+  // Scan the host already typed in, ignoring any instance suffix.
+  const scanHost = (conn.host || "localhost").split("\\")[0] || "localhost";
+
+  const discover = async () => {
+    setScanning(true);
+    setScanError("");
+    setInstances(null);
+    try {
+      const found = await invokeNative<MssqlInstance[]>("mssql_instances", { host: scanHost });
+      setInstances(found);
+      if (found.length === 0) setScanError(`No instances reported by ${scanHost}.`);
+    } catch (e) {
+      const msg = String(e);
+      setScanError([msg, explainMssqlError(msg)].filter(Boolean).join(" "));
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const applyInstance = (i: MssqlInstance) => {
+    const isDefault = i.instance.toLowerCase() === "mssqlserver";
+    onFill({
+      host: isDefault ? i.server : formatServerAddress(i.server, i.instance),
+      // A resolved port is kept — it saves a SQL Browser round trip on every connect.
+      port: i.tcpPort ?? undefined,
+    });
+    toast.success(`Using ${isDefault ? i.server : `${i.server}\\${i.instance}`}${i.tcpPort ? ` on port ${i.tcpPort}` : ""}`);
+  };
+
+  const applyPaste = () => {
+    try {
+      const { conn: fields, password, notes: parsedNotes } = parseMssqlConnString(paste);
+      onFill(fields, password);
+      setNotes(parsedNotes);
+      toast.success("Fields filled from the connection string");
+    } catch (e) {
+      setNotes([]);
+      toast.error(String(e instanceof Error ? e.message : e));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/20 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium">Quick connect</span>
+        <Button size="sm" variant="outline" disabled={!isTauri() || scanning} onClick={discover}>
+          <RefreshCw className={cn(scanning && "animate-spin")} />
+          {scanning ? "Scanning…" : `Find instances on ${scanHost}`}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setShowPaste((v) => !v)}>
+          Paste a connection string
+        </Button>
+      </div>
+
+      {!isTauri() && <Hint>Instance discovery needs the desktop app.</Hint>}
+
+      {showPaste && (
+        <div className="flex flex-col gap-2">
+          <Textarea
+            mono
+            className="min-h-20 text-[12px]"
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            placeholder={'Server=HOST\\SQLEXPRESS;Database=App;Integrated Security=True\njdbc:sqlserver://host:1433;databaseName=App;user=sa;password=…'}
+          />
+          <div>
+            <Button size="sm" variant="outline" disabled={!paste.trim()} onClick={applyPaste}>
+              Fill the fields
+            </Button>
+          </div>
+          <Hint>Accepts an SSMS / ADO.NET / JDBC string. Any password in it is kept for this session only.</Hint>
+        </div>
+      )}
+
+      {notes.length > 0 && (
+        <ul className="list-disc pl-4 text-[11px] text-muted-foreground">
+          {notes.map((n) => <li key={n}>{n}</li>)}
+        </ul>
+      )}
+
+      {scanError && <p className="text-[11px] text-destructive">{scanError}</p>}
+
+      {instances && instances.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {instances.map((i) => (
+            <button
+              key={`${i.server}\\${i.instance}`}
+              onClick={() => applyInstance(i)}
+              className="flex items-center gap-2 rounded border border-border px-2 py-1 text-left text-xs hover:bg-muted"
+            >
+              <DbIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-medium">
+                {i.instance.toLowerCase() === "mssqlserver" ? `${i.server} (default instance)` : `${i.server}\\${i.instance}`}
+              </span>
+              <span className="text-muted-foreground">{i.tcpPort ? `port ${i.tcpPort}` : "no TCP port"}</span>
+              {i.tcpEnabled === false && <Badge variant="destructive" className="text-[10px]">TCP/IP off</Badge>}
+              {i.version && <span className="ml-auto text-muted-foreground">v{i.version}</span>}
+            </button>
+          ))}
+          <Hint>
+            Found via {instances[0].source === "browser" ? "the SQL Browser" : "the local registry"}. Click one to fill Host and Port.
+          </Hint>
+          {instances.some((i) => i.tcpEnabled === false) && (
+            <>
+              <p className="text-[11px] text-destructive">
+                An instance has the TCP/IP protocol disabled — it accepts Shared Memory connections (so SSMS works) but
+                refuses every TCP driver, including this one. Enable TCP/IP and restart the service.
+              </p>
+              <Tips
+                error="10061"
+                domain="mssql"
+                context={(() => {
+                  const off = instances.find((i) => i.tcpEnabled === false);
+                  return {
+                    internalName: off?.internalName,
+                    serviceName: serviceNameFor(off?.instance),
+                    host: off?.server,
+                  };
+                })()}
+              />
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
