@@ -12,6 +12,8 @@ import {
   Plus,
   RotateCcw,
   Star,
+  FileText,
+  BarChart3,
   Trash2,
   Upload,
   MessageSquareQuote,
@@ -42,8 +44,18 @@ import {
   type Question,
   type TopicId,
 } from "@/tools/lib/learn";
+import {
+  GRADES,
+  dueCards,
+  previewIntervals,
+  srsStats,
+  streakDays,
+  weakAreas,
+  MATURE_DAYS,
+  type Grade,
+} from "@/tools/lib/learn/srs";
 
-type Mode = "browse" | "revise" | "stories";
+type Mode = "browse" | "revise" | "sheet" | "stats" | "stories";
 
 export function LearnHub() {
   const custom = useLearnStore((s) => s.custom);
@@ -51,6 +63,8 @@ export function LearnHub() {
   const bookmarks = useLearnStore((s) => s.bookmarks);
   const hidden = useLearnStore((s) => s.hidden);
   const mark = useLearnStore((s) => s.mark);
+  const reviews = useLearnStore((s) => s.reviews);
+  const gradeCard = useLearnStore((s) => s.gradeCard);
   const toggleBookmark = useLearnStore((s) => s.toggleBookmark);
   const deleteQuestion = useLearnStore((s) => s.deleteQuestion);
   const importIntoStore = useLearnStore((s) => s.importQuestions);
@@ -87,22 +101,34 @@ export function LearnHub() {
   );
 
   const grouped = useMemo(() => groupBySubtopic(filtered), [filtered]);
-  const stats = useMemo(() => topicStats(all, progress), [all, progress]);
+  const topicCounts = useMemo(() => topicStats(all, progress), [all, progress]);
   const overall = useMemo(() => overallProgress(all, progress), [all, progress]);
 
-  const deck = useMemo(() => reviseOrder(filtered, progress), [filtered, progress]);
+  // Revision is driven by the schedule: due cards first, weakest of those first.
+  const now = Date.now();
+  const due = useMemo(() => dueCards(filtered, reviews, now), [filtered, reviews, now]);
+  const deck = due.length > 0 ? due : reviseOrder(filtered, progress);
   const card = deck[Math.min(reviseIndex, Math.max(deck.length - 1, 0))];
+
+  const srs = useMemo(() => srsStats(all, reviews, Date.now()), [all, reviews]);
+  const streak = useMemo(() => streakDays(reviews, Date.now()), [reviews]);
+  const weak = useMemo(
+    () => weakAreas(all, reviews, (q) => q.topic, (key) => TOPICS.find((t) => t.id === key)?.label ?? key),
+    [all, reviews],
+  );
+  const intervals = useMemo(() => (card ? previewIntervals(reviews[card.id], Date.now()) : null), [card, reviews]);
 
   const selected = useMemo(
     () => filtered.find((q) => q.id === selectedId) ?? filtered[0],
     [filtered, selectedId],
   );
 
-  const answer = (state: "known" | "review") => {
+  const answer = (grade: Grade) => {
     if (!card) return;
-    mark(card.id, state);
+    gradeCard(card.id, grade);
     setRevealed(false);
-    setReviseIndex((i) => Math.min(i + 1, deck.length - 1));
+    // "again" leaves the card due, so it returns later in the same session.
+    setReviseIndex((i) => i + 1);
   };
 
   const doExport = () => {
@@ -165,6 +191,8 @@ export function LearnHub() {
             <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
               <ModeBtn active={mode === "browse"} onClick={() => setMode("browse")} icon={<BookOpen className="size-3.5" />} label="Browse" />
               <ModeBtn active={mode === "revise"} onClick={() => { setMode("revise"); setReviseIndex(0); setRevealed(false); }} icon={<RotateCcw className="size-3.5" />} label="Revise" />
+              <ModeBtn active={mode === "sheet"} onClick={() => setMode("sheet")} icon={<FileText className="size-3.5" />} label="Cheat sheet" />
+              <ModeBtn active={mode === "stats"} onClick={() => setMode("stats")} icon={<BarChart3 className="size-3.5" />} label="Stats" />
               <ModeBtn active={mode === "stories"} onClick={() => setMode("stories")} icon={<MessageSquareQuote className="size-3.5" />} label="STAR stories" />
             </div>
 
@@ -204,22 +232,28 @@ export function LearnHub() {
 
           {mode === "stories" ? (
             <StarStories />
+          ) : mode === "sheet" ? (
+            <CheatSheet questions={filtered} />
+          ) : mode === "stats" ? (
+            <StatsView stats={srs} streak={streak} weak={weak} onPickTopic={(t) => { setTopic(t); setMode("revise"); setReviseIndex(0); }} />
           ) : mode === "revise" ? (
             <ReviseCard
               card={card}
               index={reviseIndex}
               total={deck.length}
+              dueCount={due.length}
+              intervals={intervals}
               revealed={revealed}
               onReveal={() => setRevealed(true)}
               onAnswer={answer}
-              onSkip={() => { setRevealed(false); setReviseIndex((i) => Math.min(i + 1, deck.length - 1)); }}
+              onSkip={() => { setRevealed(false); setReviseIndex((i) => i + 1); }}
               onRestart={() => { setReviseIndex(0); setRevealed(false); }}
             />
           ) : (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-[300px_1fr]">
               {/* List */}
               <div className="flex flex-col gap-2">
-                <TopicProgress stats={stats} active={topic} onPick={setTopic} />
+                <TopicProgress stats={topicCounts} active={topic} onPick={setTopic} />
                 <div className="h-[calc(100vh-400px)] min-h-64 overflow-auto rounded-md border border-border">
                   {filtered.length === 0 ? (
                     <p className="p-3 text-xs text-muted-foreground">No questions match these filters.</p>
@@ -421,6 +455,8 @@ function ReviseCard({
   card,
   index,
   total,
+  dueCount,
+  intervals,
   revealed,
   onReveal,
   onAnswer,
@@ -430,16 +466,21 @@ function ReviseCard({
   card?: Question;
   index: number;
   total: number;
+  dueCount: number;
+  intervals: Record<Grade, string> | null;
   revealed: boolean;
   onReveal: () => void;
-  onAnswer: (s: "known" | "review") => void;
+  onAnswer: (g: Grade) => void;
   onSkip: () => void;
   onRestart: () => void;
 }) {
   if (!card) {
     return (
-      <div className="grid h-64 place-items-center rounded-md border border-border text-sm text-muted-foreground">
-        Nothing to revise with these filters.
+      <div className="grid h-64 place-items-center rounded-md border border-border text-center text-sm text-muted-foreground">
+        <div>
+          <p>Nothing due right now.</p>
+          <p className="mt-1 text-xs">Everything with these filters is scheduled for later — come back tomorrow, or widen the filters.</p>
+        </div>
       </div>
     );
   }
@@ -448,6 +489,7 @@ function ReviseCard({
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         <span>Card {index + 1} of {total}</span>
+        {dueCount > 0 && <Badge variant="outline" className="text-[10px]">{dueCount} due</Badge>}
         <div className="h-1 flex-1 overflow-hidden rounded-full bg-secondary">
           <div className="h-full bg-primary transition-all" style={{ width: `${((index + 1) / total) * 100}%` }} />
         </div>
@@ -483,13 +525,161 @@ function ReviseCard({
         )}
       </div>
 
+      {/* Grading drives the schedule, so each button shows when the card returns. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" onClick={() => onAnswer("review")}><RotateCcw /> Needs review</Button>
-        <Button onClick={() => onAnswer("known")}><Check /> I knew it</Button>
+        {revealed ? (
+          GRADES.map((g) => (
+            <Button
+              key={g.id}
+              variant={g.id === "good" ? "default" : "outline"}
+              title={g.hint}
+              onClick={() => onAnswer(g.id)}
+            >
+              {g.label}
+              {intervals && <span className="ml-1.5 text-[11px] opacity-70">{intervals[g.id]}</span>}
+            </Button>
+          ))
+        ) : (
+          <p className="text-xs text-muted-foreground">Reveal the answer to grade it.</p>
+        )}
         <Button variant="ghost" onClick={onSkip}><EyeOff /> Skip</Button>
       </div>
     </div>
   );
+}
+
+/** A condensed one-pager: every question with the first line of its answer. */
+function CheatSheet({ questions }: { questions: Question[] }) {
+  const grouped = useMemo(() => groupBySubtopic(questions), [questions]);
+
+  const text = useMemo(
+    () =>
+      grouped
+        .map((g) => `## ${g.subtopic}\n` + g.questions.map((q) => `- ${q.question}\n  ${firstLine(q.answer)}`).join("\n"))
+        .join("\n\n"),
+    [grouped],
+  );
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <p className="text-[11px] text-muted-foreground">
+          {questions.length} questions condensed to one line each — for the morning of the interview.
+        </p>
+        <CopyButton value={text} label="Copy sheet" className="ml-auto h-7 px-2 text-[11px]" />
+      </div>
+
+      <div className="h-[calc(100vh-340px)] min-h-64 overflow-auto rounded-md border border-border p-4">
+        {grouped.map((group) => (
+          <section key={group.subtopic} className="mb-4">
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.subtopic}</h3>
+            <ul className="space-y-1.5">
+              {group.questions.map((q) => (
+                <li key={q.id} className="text-xs">
+                  <span className="font-medium">{q.question}</span>
+                  {q.mustKnow && <Star className="ml-1 inline size-2.5 fill-warning text-warning" />}
+                  <span className="block text-muted-foreground">{firstLine(q.answer)}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** First meaningful line of a Markdown answer, with the formatting stripped. */
+function firstLine(answer: string): string {
+  const line = answer
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith("#") && !l.startsWith("|"));
+
+  return (line ?? "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .slice(0, 200);
+}
+
+function StatsView({
+  stats,
+  streak,
+  weak,
+  onPickTopic,
+}: {
+  stats: ReturnType<typeof srsStats>;
+  streak: number;
+  weak: ReturnType<typeof weakAreas>;
+  onPickTopic: (t: TopicId) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Due now" value={stats.dueNow} accent={stats.dueNow > 0 ? "text-warning" : undefined} />
+        <Stat label="Reviewed today" value={stats.reviewsToday} />
+        <Stat label="Day streak" value={streak} accent={streak > 0 ? "text-success" : undefined} />
+        <Stat label="Retention" value={`${stats.retention}%`} accent={stats.retention >= 85 ? "text-success" : stats.retention > 0 ? "text-warning" : undefined} />
+        <Stat label={`Mature (${MATURE_DAYS}d+)`} value={stats.mature} />
+        <Stat label="Not seen" value={stats.unseen} />
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">Coverage</p>
+        <div className="flex h-2 overflow-hidden rounded-full bg-secondary">
+          <div className="bg-success" style={{ width: `${pct(stats.mature, stats.total)}%` }} title={`${stats.mature} mature`} />
+          <div className="bg-warning" style={{ width: `${pct(stats.learning, stats.total)}%` }} title={`${stats.learning} learning`} />
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {stats.mature} mature · {stats.learning} learning · {stats.unseen} unseen of {stats.total}
+        </p>
+      </div>
+
+      <div>
+        <p className="mb-1 text-xs font-medium">Where you are losing</p>
+        <p className="mb-2 text-[11px] text-muted-foreground">
+          Ranked by how often a card in that topic was graded “Again”. Click one to revise it.
+        </p>
+        <div className="flex flex-col gap-1">
+          {weak.filter((w) => w.failureRate > 0 || w.weak > 0).length === 0 ? (
+            <p className="text-xs text-muted-foreground">No failures recorded yet — grade some cards first.</p>
+          ) : (
+            weak
+              .filter((w) => w.failureRate > 0 || w.weak > 0)
+              .map((w) => (
+                <button
+                  key={w.key}
+                  onClick={() => onPickTopic(w.key as TopicId)}
+                  className="flex items-center gap-2 rounded border border-border px-2 py-1 text-left text-xs hover:bg-muted"
+                >
+                  <span className="w-32 shrink-0">{w.label}</span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+                    <div className="h-full bg-destructive" style={{ width: `${Math.min(w.failureRate, 100)}%` }} />
+                  </div>
+                  <span className="w-28 shrink-0 text-right text-muted-foreground">
+                    {w.failureRate}% failed · {w.weak} weak
+                  </span>
+                </button>
+              ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div className="rounded-md border border-border p-2">
+      <div className={cn("text-lg font-semibold", accent)}>{value}</div>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function pct(n: number, total: number): number {
+  return total === 0 ? 0 : Math.round((n / total) * 100);
 }
 
 function blankQuestion(topic: TopicId | "all"): Question {

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Question } from "@/tools/lib/learn/types";
 import type { StarStory } from "@/tools/lib/learn/star";
+import { schedule, type Grade, type ReviewMap } from "@/tools/lib/learn/srs";
 
 /**
  * Learning state: your own questions, revision progress and bookmarks.
@@ -24,6 +25,8 @@ interface LearnState {
   hidden: string[];
   /** Behavioural STAR stories written by the user. */
   stories: StarStory[];
+  /** Spaced-repetition schedule, keyed by question id. */
+  reviews: ReviewMap;
 
   addQuestion: (q: Omit<Question, "id"> & { id?: string }) => string;
   updateQuestion: (q: Question) => void;
@@ -34,6 +37,10 @@ interface LearnState {
   resetProgress: (ids?: string[]) => void;
   toggleBookmark: (id: string) => void;
   toggleHidden: (id: string) => void;
+
+  /** Grade a card and schedule its next review. */
+  gradeCard: (id: string, grade: Grade) => void;
+  resetReviews: (ids?: string[]) => void;
 
   saveStory: (story: StarStory) => string;
   deleteStory: (id: string) => void;
@@ -48,6 +55,7 @@ export const useLearnStore = create<LearnState>()(
       bookmarks: [],
       hidden: [],
       stories: [],
+      reviews: {},
 
       addQuestion: (q) => {
         const id = q.id ?? uid();
@@ -92,6 +100,25 @@ export const useLearnStore = create<LearnState>()(
         set((s) => ({
           hidden: s.hidden.includes(id) ? s.hidden.filter((h) => h !== id) : [...s.hidden, id],
         })),
+
+      gradeCard: (id, grade) =>
+        set((s) => {
+          const next = schedule(s.reviews[id], grade, Date.now());
+          // Keep the simple known/review flags in step, so the browse list still shows state.
+          const progress = { ...s.progress };
+          if (grade === "again") progress[id] = "review";
+          else if (next.intervalDays >= 6) progress[id] = "known";
+          else delete progress[id];
+
+          return { reviews: { ...s.reviews, [id]: next }, progress };
+        }),
+      resetReviews: (ids) =>
+        set((s) => {
+          if (!ids) return { reviews: {} };
+          const next = { ...s.reviews };
+          for (const id of ids) delete next[id];
+          return { reviews: next };
+        }),
 
       saveStory: (story) => {
         const id = story.id || uid();
