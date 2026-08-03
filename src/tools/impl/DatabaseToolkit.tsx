@@ -19,6 +19,7 @@ import {
   Download,
   Upload,
   KeyRound,
+  Wand2,
   X,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
@@ -60,6 +61,15 @@ import {
 import { serviceNameFor } from "@/lib/tips";
 import { credentialKey, credentialLabel, findCredential } from "@/tools/lib/credentials";
 import { analyzeSql, isWriteSql, highestRisk } from "@/tools/lib/sqlSafety";
+import {
+  editorLanguage,
+  formatterDialect,
+  selectPreviewSql,
+  sqlCompletions,
+  sqlMarkers,
+} from "@/tools/lib/sqlEditor";
+import { formatSql } from "@/tools/lib/sql";
+import { CodeEditor, type EditorMarker } from "@/components/CodeEditor";
 import { DbObjectDetails } from "@/tools/impl/DbObjectDetails";
 import { DbMonitor } from "@/tools/impl/DbMonitor";
 import {
@@ -317,6 +327,32 @@ export function DatabaseToolkit() {
   const findings = useMemo(() => analyzeSql(sql), [sql]);
   const risk = highestRisk(findings);
 
+  const engine = active?.engine ?? "sqlite";
+  /** Risk findings as editor squiggles: destructive is an error, the rest warnings. */
+  const editorMarkers = useMemo<EditorMarker[]>(
+    () => sqlMarkers(sql).map((m) => ({
+      start: m.start,
+      end: m.end,
+      severity: m.risk === "destructive" ? "error" : "warning",
+      message: m.message,
+    })),
+    [sql],
+  );
+  // A getter, not a list: the suggest widget then always reads the objects and
+  // result columns loaded at the moment the user typed.
+  const completions = useCallback(
+    () => sqlCompletions({ engine, objects, columns: result?.columns }),
+    [engine, objects, result],
+  );
+
+  function formatQuery() {
+    try {
+      setSql(formatSql(sql, { language: formatterDialect(engine), uppercase: true, tabWidth: 2 }));
+    } catch (e) {
+      toast.error(`Could not format this SQL: ${(e as Error).message}`);
+    }
+  }
+
   async function testConn(conn: DbConnection) {
     if (!isTauri()) return;
     // Catch missing fields here: the drivers report them as unreadable configuration errors.
@@ -437,8 +473,8 @@ export function DatabaseToolkit() {
   }
 
   function selectFrom(obj: DbObject) {
-    const qualified = obj.schema ? `${obj.schema}.${obj.name}` : obj.name;
-    setSql(`SELECT * FROM ${qualified} LIMIT 100;`);
+    // Engine-aware: LIMIT is not valid T-SQL, and identifiers may need quoting.
+    setSql(selectPreviewSql(engine, obj));
     setTab("query");
   }
 
@@ -757,13 +793,17 @@ export function DatabaseToolkit() {
                 <DbMonitor engine={active.engine} runSql={runSql} />
               ) : (
                 <div className="flex flex-col gap-2">
-                  <Textarea
-                    mono
+                  <CodeEditor
                     value={sql}
-                    onChange={(e) => { setSql(e.target.value); setConfirmRisk(false); }}
-                    onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !busy && !needsPassword && engineReady(active.engine)) { e.preventDefault(); runQuery(); } }}
-                    className="min-h-32"
-                    placeholder="Write SQL… (Ctrl+Enter to run)"
+                    onChange={(v) => { setSql(v); setConfirmRisk(false); }}
+                    language={editorLanguage(active.engine)}
+                    markers={editorMarkers}
+                    completions={completions}
+                    onRun={() => { if (!busy && !needsPassword && engineReady(active.engine)) runQuery(); }}
+                    onFormat={formatQuery}
+                    height={220}
+                    placeholder="Write SQL… (Ctrl+Enter to run, Ctrl+Space for suggestions)"
+                    ariaLabel="SQL query editor"
                   />
 
                   {risk && (
@@ -790,6 +830,9 @@ export function DatabaseToolkit() {
                       <Play /> {busy === "query" ? "Running…" : confirmRisk ? "Run anyway" : "Run"}
                     </Button>
                     {confirmRisk && <Button size="sm" variant="ghost" onClick={() => setConfirmRisk(false)}>Cancel</Button>}
+                    <Button size="sm" variant="outline" onClick={formatQuery} title="Format SQL (Ctrl+Shift+F)">
+                      <Wand2 /> Format
+                    </Button>
                     {connHistory.length > 0 && (
                       <select
                         value=""
