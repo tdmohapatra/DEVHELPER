@@ -17,6 +17,14 @@ interface AppState {
   recent: string[]; // most-recent first
   view: View;
   sidebarCollapsed: boolean;
+  /**
+   * Category groups expanded in the sidebar.
+   *
+   * Every group open at once makes the nav a long scroll that hides more than it
+   * shows, so groups start closed and the one holding the current tool opens
+   * itself. What the user opens deliberately is remembered.
+   */
+  openGroups: string[];
   /** Activity log dock: hidden entirely, collapsed to its status bar, or open. */
   logDock: "hidden" | "bar" | "open";
 
@@ -27,6 +35,8 @@ interface AppState {
   openTool: (toolId: string) => void;
   openView: (view: View) => void;
   toggleSidebar: () => void;
+  toggleGroup: (categoryId: string) => void;
+  setGroupOpen: (categoryId: string, open: boolean) => void;
   setLogDock: (state: AppState["logDock"]) => void;
   /** Open the dock if it is not already, otherwise collapse it back to the bar. */
   toggleLogDock: () => void;
@@ -66,6 +76,7 @@ export const useAppStore = create<AppState>()(
       recent: [],
       view: { kind: "dashboard" },
       sidebarCollapsed: false,
+      openGroups: [],
       logDock: "bar",
 
       toggleTheme: () => {
@@ -95,6 +106,18 @@ export const useAppStore = create<AppState>()(
         set({ view });
       },
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleGroup: (categoryId) =>
+        set((s) => ({
+          openGroups: s.openGroups.includes(categoryId)
+            ? s.openGroups.filter((g) => g !== categoryId)
+            : [...s.openGroups, categoryId],
+        })),
+      setGroupOpen: (categoryId, open) =>
+        set((s) => ({
+          openGroups: open
+            ? s.openGroups.includes(categoryId) ? s.openGroups : [...s.openGroups, categoryId]
+            : s.openGroups.filter((g) => g !== categoryId),
+        })),
       setLogDock: (logDock) => set({ logDock }),
       toggleLogDock: () => set((s) => ({ logDock: s.logDock === "open" ? "bar" : "open" })),
     }),
@@ -105,6 +128,7 @@ export const useAppStore = create<AppState>()(
         favorites: s.favorites,
         recent: s.recent,
         sidebarCollapsed: s.sidebarCollapsed,
+        openGroups: s.openGroups,
         logDock: s.logDock,
       }),
       onRehydrateStorage: () => (state) => {

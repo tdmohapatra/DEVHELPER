@@ -375,3 +375,27 @@ export function monitorUrl(input: string, path: string): string {
   if (!/:\d+(\/|$)/.test(base)) base = `${base}:8222`;
   return `${base}${path}`;
 }
+
+/**
+ * Extra guidance for a failed monitoring request, chosen from what was typed.
+ *
+ * 4222 is worth naming outright: it is the client protocol port, it speaks the
+ * NATS wire protocol rather than HTTP, and no retry makes it answer JSON.
+ * JetStream running changes nothing here — monitoring is a separate listener
+ * that has to be enabled on its own.
+ */
+export function portAdvice(server: string): string {
+  const port = /:(\d+)/.exec(server)?.[1];
+  const named: Record<string, string> = { "4222": "client protocol", "6222": "cluster route", "7422": "leafnode" };
+  if (port && named[port]) {
+    return ` — ${port} is the ${named[port]} port and speaks NATS, not HTTP. The monitoring port is a separate listener, 8222 by default, enabled with -m 8222 or http_port in the config. JetStream being enabled does not enable it.`;
+  }
+  if (!port) return " — no port given, so 8222 was assumed. Enable monitoring with -m 8222 if it is not running.";
+  return ` — check that a monitoring listener is running on ${port}. It is enabled with -m <port> or http_port, separately from the client port.`;
+}
+
+/** The same address with its port replaced by the monitoring default. */
+export function withMonitorPort(server: string): string {
+  const trimmed = server.trim().replace(/\/+$/, "");
+  return /:\d+/.test(trimmed) ? trimmed.replace(/:(\d+)/, ":8222") : `${trimmed}:8222`;
+}

@@ -6,6 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
 import { cn } from "@/lib/utils";
+import { executeRequest } from "@/lib/http";
+import { NativeNotice } from "@/components/NativeNotice";
+import { isTauri } from "@/lib/platform";
 import {
   allConsumers,
   allStreams,
@@ -16,6 +19,8 @@ import {
   serverFindings,
   subjectMatches,
   matchingFilters,
+  portAdvice,
+  withMonitorPort,
   type Connz,
   type Jsz,
   type Severity,
@@ -71,11 +76,26 @@ export function NatsTool() {
   const [subjectTest, setSubjectTest] = useState("orders.new.eu");
   const [filterInput, setFilterInput] = useState("orders.>\norders.*\nbilling.>");
 
+  /**
+   * Fetch a monitoring endpoint through the Tauri HTTP plugin.
+   *
+   * Not `window.fetch`: the webview runs under `default-src 'self'`, so a request
+   * to any other origin — including a NATS server on localhost — is blocked
+   * before it leaves, and the server sends no CORS headers either. The plugin
+   * issues the request from Rust, where neither applies.
+   */
   const get = useCallback(
     async (path: string): Promise<unknown> => {
-      const res = await fetch(monitorUrl(server, path));
+      const url = monitorUrl(server, path);
+      const res = await executeRequest({ method: "GET", url, headers: {} }, undefined, { timeoutMs: 5000 });
       if (!res.ok) throw new Error(`${path} returned ${res.status} ${res.statusText}`);
-      return res.json();
+      try {
+        return JSON.parse(res.body);
+      } catch {
+        throw new Error(
+          `${path} did not return JSON. ${res.body.slice(0, 120)}`,
+        );
+      }
     },
     [server],
   );
@@ -101,9 +121,7 @@ export function NatsTool() {
       setHealth(h ? JSON.stringify(h) : "");
       setLoaded(true);
     } catch (e) {
-      setError(
-        `${(e as Error).message}. The monitoring port is 8222 by default and must be enabled with -m 8222 or http_port in the config; it is not the client port 4222.`,
-      );
+      setError(`${(e as Error).message}${portAdvice(server)}`);
       setLoaded(false);
     } finally {
       setBusy(false);
@@ -148,6 +166,8 @@ export function NatsTool() {
       title="NATS"
       description="Server, connections, subjects and JetStream streams and consumers, over the monitoring port."
     >
+      {!isTauri() && <NativeNotice what="Reading a NATS server" />}
+
       <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Monitoring address</span>
@@ -173,7 +193,21 @@ export function NatsTool() {
         )}
       </div>
 
-      {error && <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
+      {error && (
+        <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+          <p>{error}</p>
+          {withMonitorPort(server) !== server.trim() && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              onClick={() => { const next = withMonitorPort(server); setServer(next); setError(""); }}
+            >
+              Use {withMonitorPort(server)} instead
+            </Button>
+          )}
+        </div>
+      )}
 
       {loaded && (
         <>

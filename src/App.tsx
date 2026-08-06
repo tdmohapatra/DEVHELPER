@@ -81,6 +81,12 @@ export default function App() {
         useAppStore.getState().toggleLogDock();
         return;
       }
+      // Ctrl+B → show or hide the sidebar, for when the screen is needed.
+      if (e.ctrlKey && !e.shiftKey && (e.key === "b" || e.code === "KeyB")) {
+        e.preventDefault();
+        useAppStore.getState().toggleSidebar();
+        return;
+      }
       // Ctrl+K or Ctrl+Space → command palette.
       if (e.ctrlKey && (e.key === "k" || e.code === "Space")) {
         e.preventDefault();

@@ -11,6 +11,8 @@ import {
   matchingFilters,
   publishSubjectProblem,
   monitorUrl,
+  portAdvice,
+  withMonitorPort,
   type Jsz,
   type Connz,
 } from "./natsMonitor";
@@ -268,5 +270,49 @@ describe("formatting", () => {
   it("scales bytes", () => {
     expect(formatBytes(2048)).toBe("2.00 KB");
     expect(formatBytes(undefined)).toBe("—");
+  });
+});
+
+describe("portAdvice", () => {
+  it("names 4222 as the client port and says monitoring is separate", () => {
+    const advice = portAdvice("127.0.0.1:4222");
+    expect(advice).toMatch(/4222 is the client protocol port/);
+    expect(advice).toMatch(/speaks NATS, not HTTP/);
+    // The trap worth closing: having JetStream on does not give you /jsz.
+    expect(advice).toMatch(/JetStream being enabled does not enable it/);
+  });
+
+  it("names the cluster and leafnode ports too", () => {
+    expect(portAdvice("host:6222")).toMatch(/cluster route port/);
+    expect(portAdvice("host:7422")).toMatch(/leafnode port/);
+  });
+
+  it("says 8222 was assumed when no port was given", () => {
+    expect(portAdvice("localhost")).toMatch(/8222 was assumed/);
+  });
+
+  it("gives generic advice for any other port", () => {
+    const advice = portAdvice("localhost:9999");
+    expect(advice).toMatch(/running on 9999/);
+    expect(advice).not.toMatch(/client protocol/);
+  });
+});
+
+describe("withMonitorPort", () => {
+  it("swaps the port for the monitoring default", () => {
+    expect(withMonitorPort("127.0.0.1:4222")).toBe("127.0.0.1:8222");
+    expect(withMonitorPort("http://nats.internal:4222")).toBe("http://nats.internal:8222");
+  });
+
+  it("appends the port when there is none", () => {
+    expect(withMonitorPort("localhost")).toBe("localhost:8222");
+  });
+
+  it("leaves an address already on 8222 unchanged, so no pointless retry is offered", () => {
+    expect(withMonitorPort("localhost:8222")).toBe("localhost:8222");
+  });
+
+  it("strips a trailing slash first", () => {
+    expect(withMonitorPort("http://localhost:4222/")).toBe("http://localhost:8222");
   });
 });
