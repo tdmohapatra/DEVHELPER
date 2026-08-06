@@ -6,15 +6,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { queryJsonPath } from "@/tools/lib/jsonPath";
 import {
+  FORMAT_CHOICES,
   KIND_LABELS,
   availableModes,
   bodyStats,
   detectBodyKind,
+  effectiveKind,
   formatBody,
   headerValue,
   htmlSummary,
   mediaType,
   supportsJsonPath,
+  type FormatChoice,
   type ViewMode,
 } from "@/tools/lib/responseBody";
 
@@ -29,9 +32,11 @@ const MODE_LABELS: Record<ViewMode, string> = { pretty: "Pretty", raw: "Raw", pr
  */
 export function ApiResponseBody({ body, headers }: { body: string; headers: Record<string, string> }) {
   const contentType = headerValue(headers, "content-type");
-  const kind = useMemo(() => detectBodyKind(contentType, body), [contentType, body]);
+  const detected = useMemo(() => detectBodyKind(contentType, body), [contentType, body]);
+  const [format, setFormat] = useState<FormatChoice>("auto");
+  const kind = effectiveKind(format, detected);
   const modes = useMemo(() => availableModes(kind), [kind]);
-  const [mode, setMode] = useState<ViewMode>(modes[0]);
+  const [mode, setMode] = useState<ViewMode>("raw");
   const [filter, setFilter] = useState("");
 
   // A new response can be a different kind, whose modes may not include the
@@ -40,7 +45,12 @@ export function ApiResponseBody({ body, headers }: { body: string; headers: Reco
     if (!modes.includes(mode)) setMode(modes[0]);
   }, [modes, mode]);
 
-  const pretty = useMemo(() => formatBody(kind, body), [kind, body]);
+  // Formatting is work, and the default view does not need it. Computed only
+  // once a mode that shows formatted text is actually selected.
+  const pretty = useMemo(
+    () => (mode === "pretty" ? formatBody(kind, body) : { text: "" }),
+    [mode, kind, body],
+  );
   const stats = useMemo(() => bodyStats(body), [body]);
 
   /** JSONPath over the parsed body — drilling into a large payload without scrolling. */
@@ -76,12 +86,24 @@ export function ApiResponseBody({ body, headers }: { body: string; headers: Reco
           ))}
         </div>
 
-        <Badge variant="outline" className="text-[10px]">{KIND_LABELS[kind]}</Badge>
-        {contentType && mediaType(contentType) !== expectedType(kind) && (
+        <select
+          value={format}
+          onChange={(e) => setFormat(e.target.value as FormatChoice)}
+          title="How to treat this body. Auto-detect reads the content, not just the header."
+          className="h-7 rounded-md border border-input bg-transparent px-1.5 text-xs"
+        >
+          {FORMAT_CHOICES.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id === "auto" ? `Auto — ${KIND_LABELS[detected]}` : c.label}
+            </option>
+          ))}
+        </select>
+
+        {format === "auto" && contentType && mediaType(contentType) !== expectedType(detected) && (
           <Badge
             variant="warning"
             className="text-[10px]"
-            title={`The server said ${mediaType(contentType)}, but the body is ${KIND_LABELS[kind]}.`}
+            title={`The server said ${mediaType(contentType)}, but the body looks like ${KIND_LABELS[detected]}.`}
           >
             declared {mediaType(contentType)}
           </Badge>

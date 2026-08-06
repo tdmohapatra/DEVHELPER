@@ -201,11 +201,43 @@ export function formatBody(kind: BodyKind, body: string): FormattedBody {
   return { text: body };
 }
 
-/** Which view tabs make sense for this kind. */
+/**
+ * Which view tabs make sense for this kind.
+ *
+ * Raw comes first and is the default: it is the body exactly as it arrived, it
+ * costs nothing to show, and a formatter is a transformation the reader should
+ * ask for rather than be given silently.
+ */
 export function availableModes(kind: BodyKind): ViewMode[] {
   if (kind === "binary") return ["raw"];
-  if (kind === "html") return ["pretty", "raw", "preview"];
-  return ["pretty", "raw"];
+  if (kind === "html") return ["raw", "pretty", "preview"];
+  return ["raw", "pretty"];
+}
+
+/** A format the reader can force, overriding detection. */
+export type FormatChoice = BodyKind | "auto";
+
+export const FORMAT_CHOICES: { id: FormatChoice; label: string }[] = [
+  { id: "auto", label: "Auto-detect" },
+  { id: "json", label: "JSON" },
+  { id: "html", label: "HTML" },
+  { id: "xml", label: "XML" },
+  { id: "csv", label: "CSV" },
+  { id: "javascript", label: "JavaScript" },
+  { id: "css", label: "CSS" },
+  { id: "text", label: "Text" },
+];
+
+/**
+ * The kind to treat the body as.
+ *
+ * Detection is right most of the time and wrong loudly when it is not — a JSON
+ * string that happens to start with `<`, a fragment of HTML with no recognisable
+ * element. Forcing a format is the escape hatch, and it is never overridden by
+ * the detector.
+ */
+export function effectiveKind(choice: FormatChoice, detected: BodyKind): BodyKind {
+  return choice === "auto" ? detected : choice;
 }
 
 export interface HtmlSummary {

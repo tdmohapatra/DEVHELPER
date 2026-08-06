@@ -6,6 +6,8 @@ import {
   formatBody,
   formatMarkup,
   availableModes,
+  effectiveKind,
+  FORMAT_CHOICES,
   htmlSummary,
   bodyStats,
   supportsJsonPath,
@@ -130,13 +132,38 @@ describe("formatMarkup", () => {
 
 describe("availableModes", () => {
   it("offers a preview only for HTML", () => {
-    expect(availableModes("html")).toEqual(["pretty", "raw", "preview"]);
-    expect(availableModes("json")).toEqual(["pretty", "raw"]);
-    expect(availableModes("xml")).toEqual(["pretty", "raw"]);
+    expect(availableModes("html")).toEqual(["raw", "pretty", "preview"]);
+    expect(availableModes("json")).toEqual(["raw", "pretty"]);
+    expect(availableModes("xml")).toEqual(["raw", "pretty"]);
+  });
+
+  it("puts raw first everywhere, so the default view transforms nothing", () => {
+    for (const kind of ["json", "html", "xml", "csv", "css", "javascript", "text", "binary"] as const) {
+      expect(availableModes(kind)[0], kind).toBe("raw");
+    }
   });
 
   it("offers only raw for binary", () => {
     expect(availableModes("binary")).toEqual(["raw"]);
+  });
+});
+
+describe("effectiveKind", () => {
+  it("uses detection when set to auto", () => {
+    expect(effectiveKind("auto", "html")).toBe("html");
+  });
+
+  it("lets a forced format win over detection", () => {
+    expect(effectiveKind("html", "text")).toBe("html");
+    expect(effectiveKind("json", "html")).toBe("json");
+  });
+
+  it("offers auto plus every kind worth forcing", () => {
+    const ids = FORMAT_CHOICES.map((c) => c.id);
+    expect(ids[0]).toBe("auto");
+    expect(ids).toContain("html");
+    expect(ids).toContain("json");
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
