@@ -20,7 +20,8 @@ import {
   type HttpMethod,
 } from "@/tools/lib/apiTypes";
 import { resolveRequest, type ResolvedRequest } from "@/tools/lib/apiRequest";
-import { queryJsonPath } from "@/tools/lib/jsonPath";
+import { ApiResponseBody } from "@/tools/impl/ApiResponseBody";
+import { detectBodyKind, formatBody, headerValue } from "@/tools/lib/responseBody";
 import { parseCurl, looksLikeCurl } from "@/tools/lib/curlImport";
 import { importPostmanCollection, exportPostmanCollection } from "@/tools/lib/postmanCollection";
 import { runAssertions, summarize, defaultAssertion, describeAssertion, type AssertionResult } from "@/tools/lib/apiAssert";
@@ -80,7 +81,6 @@ export function ApiTester() {
   const [codeTarget, setCodeTarget] = useState<CodeTarget>("curl");
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
-  const [bodyFilter, setBodyFilter] = useState("");
   const [tokenNote, setTokenNote] = useState<string | undefined>();
   const [fetchingToken, setFetchingToken] = useState(false);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
@@ -345,31 +345,12 @@ export function ApiTester() {
 
   const newRequest = () => loadRequest(emptyRequest(uid()));
 
+  /** Formatted body, for the Copy button in the response header. */
   const prettyBody = useMemo(() => {
     if (!response) return "";
-    const ct = Object.entries(response.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
-    if (ct.includes("json")) {
-      try {
-        return JSON.stringify(JSON.parse(response.body), null, 2);
-      } catch {
-        return response.body;
-      }
-    }
-    return response.body;
+    const ct = headerValue(response.headers, "content-type");
+    return formatBody(detectBodyKind(ct, response.body), response.body).text || response.body;
   }, [response]);
-
-  /** JSONPath filter over the response — drilling into a large payload without scrolling. */
-  const filteredBody = useMemo(() => {
-    const expr = bodyFilter.trim();
-    if (!expr || !response) return prettyBody;
-    try {
-      const matches = queryJsonPath(JSON.parse(response.body), expr);
-      if (matches.length === 0) return "No matches.";
-      return JSON.stringify(matches.length === 1 ? matches[0].value : matches.map((m) => m.value), null, 2);
-    } catch (e) {
-      return `${(e as Error).message}`;
-    }
-  }, [bodyFilter, response, prettyBody]);
 
   return (
     <div className="flex h-full">
@@ -627,22 +608,7 @@ export function ApiTester() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
                 {respTab === "body" ? (
-                  <div className="flex h-full flex-col gap-2">
-                    <div className="flex items-center gap-2">
-                      <Input
-                        className="h-7 flex-1 font-mono text-xs"
-                        placeholder="Filter with JSONPath — $.data.items[*].id"
-                        value={bodyFilter}
-                        onChange={(e) => setBodyFilter(e.target.value)}
-                      />
-                      {bodyFilter && (
-                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setBodyFilter("")}>
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                    <Textarea mono readOnly className="h-full min-h-40 bg-muted/30" value={filteredBody} />
-                  </div>
+                  <ApiResponseBody body={response.body} headers={response.headers} />
                 ) : (
                   <table className="w-full text-sm">
                     <tbody className="divide-y divide-border font-mono text-[13px]">
