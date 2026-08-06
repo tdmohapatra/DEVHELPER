@@ -47,6 +47,17 @@ const ORDER_BY = /\border\s+by\b/i;
 // A window the user wrote themselves. Paging on top of one would silently
 // change what they asked for, so those statements are left alone.
 const OWN_WINDOW = /\b(limit|offset|fetch\s+(first|next))\b/i;
+/**
+ * TOP is checked at any depth, unlike the rest.
+ *
+ * T-SQL rejects TOP and OFFSET together outright — "A TOP can not be used in
+ * the same query or sub-query as a OFFSET" — so appending a window to
+ * `SELECT TOP 10 *` does not merely change the meaning, it fails to run. The
+ * server's rule is per query block, which would make a TOP inside a derived
+ * table harmless, but the error text says "or sub-query" and being wrong costs
+ * a failed query. Refusing at any depth costs only the pager.
+ */
+const ANY_TOP = /\btop\b/i;
 // `SELECT ... INTO t` creates a table; it is not a result set to page through.
 const SELECT_INTO = /\binto\b/i;
 
@@ -60,6 +71,7 @@ export function pageableStatement(sql: string): PageableQuery | null {
   const { text, masked } = spans[0];
   if (!/^\s*(select|with)\b/i.test(masked)) return null;
   if (topLevelIndex(masked, OWN_WINDOW) >= 0) return null;
+  if (ANY_TOP.test(masked)) return null;
   if (topLevelIndex(masked, SELECT_INTO) >= 0) return null;
   return { body: text, masked, hasOrderBy: topLevelIndex(masked, ORDER_BY) >= 0 };
 }

@@ -44,6 +44,21 @@ describe("pageableStatement", () => {
     expect(pageableStatement("SELECT * FROM users ORDER BY id OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY")).toBeNull();
   });
 
+  it("refuses TOP, which T-SQL will not accept alongside OFFSET", () => {
+    expect(pageableStatement("SELECT TOP 10 * FROM OrderDetails")).toBeNull();
+    expect(pageableStatement("SELECT\n  top 10 *\nFROM\n  OrderDetails;")).toBeNull();
+    expect(pageableStatement("SELECT TOP (10) PERCENT WITH TIES * FROM t ORDER BY id")).toBeNull();
+  });
+
+  it("refuses a TOP nested in a subquery too", () => {
+    expect(pageableStatement("SELECT * FROM (SELECT TOP 10 * FROM t) x")).toBeNull();
+  });
+
+  it("still allows a TOP that only appears inside a literal or comment", () => {
+    expect(q("SELECT 'top secret' AS s FROM t")).toBeTruthy();
+    expect(q("SELECT * FROM t -- top 10 rows only")).toBeTruthy();
+  });
+
   it("allows a LIMIT that only appears inside a subquery", () => {
     expect(q("SELECT * FROM (SELECT id FROM users LIMIT 10) t")).toBeTruthy();
   });
