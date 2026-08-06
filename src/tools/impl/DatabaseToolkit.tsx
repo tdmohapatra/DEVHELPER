@@ -84,6 +84,7 @@ import { CodeEditor, type EditorMarker } from "@/components/CodeEditor";
 import { DbObjectDetails } from "@/tools/impl/DbObjectDetails";
 import { DbMonitor } from "@/tools/impl/DbMonitor";
 import { DbSchemaDiff } from "@/tools/impl/DbSchemaDiff";
+import { DbSnippetPicker } from "@/tools/impl/DbSnippetPicker";
 import {
   inferColumns,
   toCsharpClass,
@@ -94,7 +95,7 @@ import {
   toInsert,
 } from "@/tools/lib/dbCodegen";
 
-type Tab = "explorer" | "query" | "monitor" | "diff";
+type Tab = "explorer" | "query" | "health" | "diff";
 type CodeGen = "csharp-class" | "csharp-record" | "ef-entity" | "ts-interface" | "json";
 
 const OBJECT_ICON = { table: Table2, view: Eye, procedure: FunctionSquare, function: FunctionSquare } as const;
@@ -245,6 +246,8 @@ export function DatabaseToolkit() {
   /** Id of a raw-string connection that just connected and could be saved as fields. */
   const [offerConvert, setOfferConvert] = useState<string | null>(null);
   const [convertNotes, setConvertNotes] = useState<string[]>([]);
+  /** Editor text replaced by the last snippet load — one step of undo. */
+  const [previousSql, setPreviousSql] = useState<string | null>(null);
 
   const runSql = useCallback(
     async (sql: string, maxRows = 200): Promise<QueryResult> => {
@@ -600,6 +603,20 @@ export function DatabaseToolkit() {
     }
   }
 
+  /**
+   * Put a snippet in the editor, keeping one step of undo.
+   *
+   * Replacing is right — these are whole statements, and appending would build a
+   * multi-statement script that the pager refuses and that runs both halves. The
+   * previous text is held so a mis-click is one button from being undone.
+   */
+  function loadSnippet(next: string, title: string) {
+    if (sql.trim() && sql.trim() !== next.trim()) setPreviousSql(sql);
+    setSql(next);
+    setTab("query");
+    toast.success(`Loaded: ${title}`);
+  }
+
   function selectFrom(obj: DbObject) {
     // Engine-aware: LIMIT is not valid T-SQL, and identifiers may need quoting.
     setSql(selectPreviewSql(engine, obj));
@@ -893,7 +910,7 @@ export function DatabaseToolkit() {
 
               {/* Tabs */}
               <div className="flex gap-1 border-b border-border">
-                {(["query", "explorer", "monitor", "diff"] as const).map((t) => (
+                {(["query", "explorer", "health", "diff"] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => { setTab(t); if (t === "explorer" && objects.length === 0) loadObjects(); }}
@@ -947,8 +964,8 @@ export function DatabaseToolkit() {
                     />
                   )}
                 </div>
-              ) : tab === "monitor" ? (
-                <DbMonitor engine={active.engine} runSql={runSql} />
+              ) : tab === "health" ? (
+                <DbMonitor engine={active.engine} runSql={runSql} onOpenInEditor={loadSnippet} />
               ) : tab === "diff" ? (
                 <DbSchemaDiff />
               ) : (
@@ -993,6 +1010,17 @@ export function DatabaseToolkit() {
                     <Button size="sm" variant="outline" onClick={formatQuery} title="Format SQL (Ctrl+Shift+F)">
                       <Wand2 /> Format
                     </Button>
+                    <DbSnippetPicker engine={active.engine} onInsert={loadSnippet} />
+                    {previousSql !== null && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Put back the SQL the snippet replaced"
+                        onClick={() => { setSql(previousSql); setPreviousSql(null); }}
+                      >
+                        Restore previous
+                      </Button>
+                    )}
                     {connHistory.length > 0 && (
                       <select
                         value=""
