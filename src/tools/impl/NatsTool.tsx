@@ -121,7 +121,8 @@ export function NatsTool() {
       setHealth(h ? JSON.stringify(h) : "");
       setLoaded(true);
     } catch (e) {
-      setError(`${(e as Error).message}${portAdvice(server)}`);
+      const reason = e instanceof Error && e.message ? e.message : String(e);
+      setError(`${reason}${portAdvice(server)}`);
       setLoaded(false);
     } finally {
       setBusy(false);
@@ -135,7 +136,7 @@ export function NatsTool() {
       setRaw(JSON.stringify(await get(rawPath), null, 2));
     } catch (e) {
       setRaw("");
-      setError((e as Error).message);
+      setError(e instanceof Error && e.message ? e.message : String(e));
     } finally {
       setBusy(false);
     }
