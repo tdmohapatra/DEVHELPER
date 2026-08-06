@@ -321,26 +321,41 @@ async fn mssql_query(conn_str: &str, sql: &str, cap: usize) -> Result<QueryResul
         .await
         .map_err(|e| friendly_mssql_error(&e.to_string()))?;
 
+    // The stream is consumed item by item rather than through into_first_result()
+    // so the column metadata is read from the METADATA token. Taking the names off
+    // the first row instead loses them whenever a SELECT matches nothing, and the
+    // frontend then cannot tell an empty result from a statement that returns no
+    // result set at all — an empty table renders as "0 rows affected".
+    use futures_util::TryStreamExt;
+
     let start = Instant::now();
-    let result = client.simple_query(sql).await.map_err(|e| e.to_string())?;
-    let all = result.into_first_result().await.map_err(|e| e.to_string())?;
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let mut stream = client.simple_query(sql).await.map_err(|e| e.to_string())?;
 
-    let columns: Vec<String> = all
-        .first()
-        .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
-        .unwrap_or_default();
-
-    let total = all.len();
+    let mut columns: Vec<String> = Vec::new();
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
-    for row in all.into_iter().take(cap) {
-        let ncols = row.columns().len();
-        let mut out = Vec::with_capacity(ncols);
-        for i in 0..ncols {
-            out.push(mssql_cell(&row, i));
+    let mut total = 0usize;
+
+    while let Some(item) = stream.try_next().await.map_err(|e| e.to_string())? {
+        match item {
+            tiberius::QueryItem::Metadata(meta) => {
+                if columns.is_empty() {
+                    columns = meta.columns().iter().map(|c| c.name().to_string()).collect();
+                }
+            }
+            tiberius::QueryItem::Row(row) => {
+                total += 1;
+                if rows.len() < cap {
+                    let ncols = row.columns().len();
+                    let mut out = Vec::with_capacity(ncols);
+                    for i in 0..ncols {
+                        out.push(mssql_cell(&row, i));
+                    }
+                    rows.push(out);
+                }
+            }
         }
-        rows.push(out);
     }
+    let elapsed_ms = start.elapsed().as_millis() as u64;
 
     Ok(QueryResult { columns, truncated: total > rows.len(), rows, row_count: total, elapsed_ms })
 }

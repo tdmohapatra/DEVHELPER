@@ -232,6 +232,16 @@ export function DatabaseToolkit() {
   const [pageSize, setPageSize] = useState(1000);
   /** Bumped per run so a slow COUNT(*) cannot land on a later query's result. */
   const runToken = useRef(0);
+  /**
+   * Bumped once per query run, and used as the result grid's key.
+   *
+   * The grid keeps its own filter, sort and page. Without a new key those carry
+   * into the next query's result, and a filter left over from an earlier query
+   * hides every row of the new one while the header still reports a success.
+   * Paging does not bump it — a filter should survive stepping through pages of
+   * the same query.
+   */
+  const [resultKey, setResultKey] = useState(0);
   /** Id of a raw-string connection that just connected and could be saved as fields. */
   const [offerConvert, setOfferConvert] = useState<string | null>(null);
   const [convertNotes, setConvertNotes] = useState<string[]>([]);
@@ -509,6 +519,7 @@ export function DatabaseToolkit() {
     // off at Max rows. Anything else runs exactly as written.
     const q = pageableStatement(sql);
     const token = ++runToken.current;
+    setResultKey((k) => k + 1);
     setPaged(q);
     setPage(0);
     setTotal(null);
@@ -527,6 +538,13 @@ export function DatabaseToolkit() {
       setConfirmRisk(false);
       mark(active.id, { state: "ok", version: activeStatus.version });
       pushHistory({ connId: active.id, sql, ok: true, rowCount: r.rowCount });
+      // Naming the database matters as much as the count: "0 rows" from the wrong
+      // database looks identical to "0 rows" from the right one.
+      log.success(
+        "db:query",
+        `${r.rowCount} row(s) · ${active.database || "server default database"} · ${active.name}`,
+        firstLine(sql),
+      );
       // A total makes the pager exact. Without one it can still step forward for
       // as long as pages come back full, so this stays best-effort.
       if (q) loadTotal(q, token);
@@ -1018,6 +1036,7 @@ export function DatabaseToolkit() {
 
                   {result && (
                     <ResultView
+                      key={resultKey}
                       result={result}
                       codeGen={codeGen}
                       setCodeGen={setCodeGen}
@@ -1563,6 +1582,15 @@ function ResultView({ result, codeGen, setCodeGen, debugEvent }: { result: Query
               ))}
             </tbody>
           </table>
+          {/* An empty grid under a successful query reads as a broken tool unless it
+              says which of the three reasons applies. */}
+          {pageRows.length === 0 && (
+            <p className="p-3 text-sm text-muted-foreground">
+              {result.rows.length === 0
+                ? "The query ran and matched no rows."
+                : `All ${result.rows.length} fetched rows are hidden by the filter "${filter}".`}
+            </p>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Statement executed. {result.rowCount} row(s) affected.</p>
