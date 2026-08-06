@@ -34,6 +34,34 @@ export interface ParsedConnString {
 
 const TRUE_VALUES = new Set(["true", "yes", "sspi", "1"]);
 
+/**
+ * Keys worth dropping without a word.
+ *
+ * These describe how a client library pools, names itself or caches credentials.
+ * None of them changes which server is reached or what it returns, so listing
+ * them as losses would only train the user to ignore the list.
+ */
+const HARMLESS_KEYS = new Set([
+  "persist security info",
+  "pooling",
+  "min pool size",
+  "max pool size",
+  "connection lifetime",
+  "connect timeout",
+  "connection timeout",
+  "command timeout",
+  "application name",
+  "app",
+  "workstation id",
+  "wsid",
+  "multipleactiveresultsets",
+  "packet size",
+  "current language",
+  "language",
+  "replication",
+  "type system version",
+]);
+
 /** `HOST\INSTANCE,1433` → its parts. Accepts a bare host, an instance, a port, or all three. */
 export function splitServerAddress(raw: string): { host: string; instance?: string; port?: number } {
   let text = raw.trim().replace(/^tcp:/i, "").trim();
@@ -65,15 +93,21 @@ export function formatServerAddress(host: string, instance?: string): string {
   return instance && !/^mssqlserver$/i.test(instance) ? `${host}\\${instance}` : host;
 }
 
-/** Split `key=value;key=value` respecting quoted values. */
-function adoPairs(text: string): [string, string][] {
-  const pairs: [string, string][] = [];
+/**
+ * Split `key=value;key=value` respecting quoted values.
+ *
+ * Each entry is `[normalized key, value, key as written]`. The original spelling
+ * is kept so a message about a dropped key names it the way the user typed it.
+ */
+function adoPairs(text: string): [string, string, string][] {
+  const pairs: [string, string, string][] = [];
   for (const segment of text.split(";")) {
     const eq = segment.indexOf("=");
     if (eq < 0) continue;
-    const key = segment.slice(0, eq).trim().toLowerCase();
+    const raw = segment.slice(0, eq).trim();
+    const key = raw.toLowerCase();
     const value = segment.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-    if (key) pairs.push([key, value]);
+    if (key) pairs.push([key, value, raw]);
   }
   return pairs;
 }
@@ -88,6 +122,7 @@ export function parseMssqlConnString(text: string): ParsedConnString {
 
   const conn: Partial<DbConnection> = { engine: "mssql" };
   const notes: string[] = [];
+  const dropped: string[] = [];
   let password: string | undefined;
   let body = trimmed;
   let jdbcAddress = "";
@@ -99,7 +134,7 @@ export function parseMssqlConnString(text: string): ParsedConnString {
     body = jdbc[2] ?? "";
   }
 
-  for (const [key, value] of adoPairs(body)) {
+  for (const [key, value, rawKey] of adoPairs(body)) {
     switch (key) {
       case "server":
       case "data source":
@@ -135,6 +170,9 @@ export function parseMssqlConnString(text: string): ParsedConnString {
       case "trustservercertificate":
         conn.trustServerCertificate = TRUE_VALUES.has(value.toLowerCase());
         break;
+      case "encrypt":
+        conn.encrypt = TRUE_VALUES.has(value.toLowerCase());
+        break;
       case "port":
         if (Number(value)) conn.port = Number(value);
         break;
@@ -143,8 +181,15 @@ export function parseMssqlConnString(text: string): ParsedConnString {
         notes.push(`"${key}" is not supported and was ignored.`);
         break;
       default:
+        // Everything else is dropped. Saying which keys went is the difference
+        // between a converted connection the user can trust and one that quietly
+        // behaves differently from the string it came from.
+        if (!HARMLESS_KEYS.has(key)) dropped.push(rawKey);
         break;
     }
+  }
+  if (dropped.length > 0) {
+    notes.push(`Not carried over: ${dropped.join(", ")}. Add them back as a raw connection string if you need them.`);
   }
 
   if (jdbcAddress) {
@@ -179,6 +224,27 @@ export function parseMssqlConnString(text: string): ParsedConnString {
   }
 
   return { conn, password, notes };
+}
+
+/**
+ * Turn a connection that holds a pasted string into one built from fields.
+ *
+ * A raw string is never written to disk — it may contain a password — so a
+ * connection in that mode has to be pasted again every session. Converting it
+ * moves the server, database and login into the persisted fields and hands the
+ * password back separately for the session-only store, which is what makes the
+ * connection reusable without ever writing a secret down.
+ */
+export function convertRawConnection(conn: DbConnection): { conn: DbConnection; password?: string; notes: string[] } {
+  if (conn.engine !== "mssql") {
+    throw new Error("Only SQL Server connection strings can be converted to fields");
+  }
+  const parsed = parseMssqlConnString(conn.rawConnString ?? "");
+  return {
+    conn: { ...conn, ...parsed.conn, usesRawConnString: false, rawConnString: undefined },
+    password: parsed.password,
+    notes: parsed.notes,
+  };
 }
 
 /** Explain a connection failure in terms of what to change. */

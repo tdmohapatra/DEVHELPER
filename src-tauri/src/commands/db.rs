@@ -203,6 +203,36 @@ fn ado_segments(conn_str: &str) -> Vec<String> {
     conn_str.split(';').map(|s| s.to_string()).collect()
 }
 
+/// Value of one ADO key, matched case-insensitively and unquoted. None when absent.
+fn ado_value(conn_str: &str, key: &str) -> Option<String> {
+    for seg in conn_str.split(';') {
+        let (k, v) = seg.split_once('=')?;
+        if k.trim().eq_ignore_ascii_case(key) {
+            return Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
+        }
+    }
+    None
+}
+
+/// Does this ADO string explicitly ask for the server certificate to be verified?
+///
+/// `Config::from_ado_string` already reads TrustServerCertificate, but the call to
+/// `trust_cert()` that follows overrides whatever it decided. Accepting any
+/// certificate is the right default for a dev tool talking to a self-signed local
+/// server, and the wrong thing to do when the user has written the opposite.
+fn mssql_verifies_cert(conn_str: &str) -> bool {
+    ado_value(conn_str, "trustservercertificate")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "false" | "no" | "0"))
+        .unwrap_or(false)
+}
+
+/// How long to wait for the TCP handshake before giving up.
+///
+/// Without this, a filtered port leaves the caller on the OS default — around 21
+/// seconds on Windows — with no output and no way to tell a slow server from a
+/// firewalled one.
+const MSSQL_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Rewrite `Server=HOST\INSTANCE` into `Server=tcp:HOST,PORT`.
 ///
 /// tiberius only performs SQL Browser lookups with the `sql-browser-tokio` feature, so the
@@ -268,10 +298,22 @@ async fn mssql_query(conn_str: &str, sql: &str, cap: usize) -> Result<QueryResul
     let resolved = resolve_mssql_instance(conn_str).await?;
 
     let mut config = Config::from_ado_string(&resolved).map_err(|e| e.to_string())?;
-    config.trust_cert(); // dev-friendly: accept self-signed server certs
+    // Dev-friendly by default: accept self-signed server certs. Skipped when the
+    // connection string asks for verification, so TrustServerCertificate=false means
+    // what it says instead of being quietly ignored.
+    if !mssql_verifies_cert(&resolved) {
+        config.trust_cert();
+    }
 
-    let tcp = TcpStream::connect(config.get_addr())
+    let addr = config.get_addr().to_string();
+    let tcp = tokio::time::timeout(MSSQL_CONNECT_TIMEOUT, TcpStream::connect(&addr))
         .await
+        .map_err(|_| {
+            friendly_mssql_error(&format!(
+                "Connect to {addr} timed out after {}s",
+                MSSQL_CONNECT_TIMEOUT.as_secs()
+            ))
+        })?
         .map_err(|e| friendly_mssql_error(&format!("Connect failed: {e}")))?;
     tcp.set_nodelay(true).ok();
 
@@ -615,6 +657,25 @@ mod tests {
         let addr = config.get_addr();
         assert!(addr.contains("DESKTOP-MHPFCI3"), "addr was {addr}");
         assert!(addr.contains("1433"), "addr was {addr}");
+    }
+
+    #[test]
+    fn ado_values_are_read_case_insensitively_and_unquoted() {
+        let s = "Data Source=x;Application Name=\"SQL Server Management Studio\";Encrypt=True";
+        assert_eq!(ado_value(s, "data source").as_deref(), Some("x"));
+        assert_eq!(ado_value(s, "APPLICATION NAME").as_deref(), Some("SQL Server Management Studio"));
+        assert_eq!(ado_value(s, "missing"), None);
+    }
+
+    #[test]
+    fn certificate_verification_is_opt_in_but_honoured() {
+        // Absent or true: trust the certificate, which is what a self-signed dev
+        // server needs. Explicitly false: verify it.
+        assert!(!mssql_verifies_cert("Server=x;Database=y"));
+        assert!(!mssql_verifies_cert("Server=x;TrustServerCertificate=True"));
+        assert!(mssql_verifies_cert("Server=x;TrustServerCertificate=False"));
+        assert!(mssql_verifies_cert("Server=x;trustservercertificate=no"));
+        assert!(mssql_verifies_cert("Server=x;TrustServerCertificate=0"));
     }
 
     #[test]

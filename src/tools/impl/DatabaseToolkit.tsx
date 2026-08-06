@@ -64,6 +64,7 @@ import {
 } from "@/tools/lib/dbPaging";
 import {
   parseMssqlConnString,
+  convertRawConnection,
   formatServerAddress,
   explainMssqlError,
   type MssqlInstance,
@@ -135,7 +136,9 @@ interface ConnStatus { state: "unknown" | "ok" | "fail"; version?: string; error
 /** Engine-specific SQL to list databases on a server (SQLite is file-based → none). */
 const DB_LIST_SQL: Record<DbEngine, string> = {
   postgres: "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
-  mssql: "SELECT name FROM sys.databases ORDER BY name",
+  // Offline, restoring and inaccessible databases are dropped: picking one only
+  // produces "Cannot open database", which reads as a broken tool.
+  mssql: "SELECT name FROM sys.databases WHERE state = 0 AND HAS_DBACCESS(name) = 1 ORDER BY name",
   mysql: "SHOW DATABASES",
   oracle: "SELECT name FROM v$database",
   sqlite: "",
@@ -229,6 +232,9 @@ export function DatabaseToolkit() {
   const [pageSize, setPageSize] = useState(1000);
   /** Bumped per run so a slow COUNT(*) cannot land on a later query's result. */
   const runToken = useRef(0);
+  /** Id of a raw-string connection that just connected and could be saved as fields. */
+  const [offerConvert, setOfferConvert] = useState<string | null>(null);
+  const [convertNotes, setConvertNotes] = useState<string[]>([]);
 
   const runSql = useCallback(
     async (sql: string, maxRows = 200): Promise<QueryResult> => {
@@ -397,6 +403,10 @@ export function DatabaseToolkit() {
         const key = credentialKey(conn);
         if (key) log.success("db:credentials", `Remembered the password for ${key} (this session only)`);
       }
+      // A pasted string is never written to disk, so this connection would be gone
+      // next session. Now that it is known to work, offer to keep it.
+      setOfferConvert(conn.usesRawConnString && conn.engine === "mssql" ? conn.id : null);
+      setConvertNotes([]);
       toast.success(`Connected — ${version.slice(0, 60)}`);
     } catch (e) {
       const raw = (e as Error).message;
@@ -408,6 +418,31 @@ export function DatabaseToolkit() {
       toast.error("Connection failed");
     } finally {
       setBusy(null);
+    }
+  }
+
+  /**
+   * Keep a working pasted connection string as a normal saved connection.
+   *
+   * The string itself stays off disk. Its server, database and login move into the
+   * persisted fields, and its password goes to the session store and the credential
+   * vault — the same place a typed password lives.
+   */
+  function convertRaw(conn: DbConnection) {
+    try {
+      const { conn: next, password, notes } = convertRawConnection(conn);
+      upsert(next);
+      if (password) {
+        setPassword(next.id, password);
+        rememberCredential(next, password);
+      }
+      mark(next.id, { state: "ok", version: status[next.id]?.version });
+      setOfferConvert(null);
+      setConvertNotes(notes);
+      log.success("db:convert", `Saved ${next.name} as fields`, notes.join(" ") || undefined);
+      toast.success("Saved — this connection is now available on every start.");
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   }
 
@@ -752,6 +787,32 @@ export function DatabaseToolkit() {
                 </div>
               )}
 
+              {offerConvert === active.id && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/40 bg-primary/5 p-2 text-xs">
+                  <KeyRound className="size-3.5 shrink-0" />
+                  <span>
+                    This connection is a pasted string, which is never written to disk — it would be gone next start.
+                    Save its server, database and login as fields to keep it.
+                  </span>
+                  <div className="ml-auto flex gap-1">
+                    <Button size="sm" onClick={() => convertRaw(active)}>Save connection</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setOfferConvert(null)}>Not now</Button>
+                  </div>
+                </div>
+              )}
+
+              {convertNotes.length > 0 && (
+                <div className="rounded-md border border-border bg-secondary/40 p-2 text-[11px]">
+                  <div className="mb-1 flex items-center gap-2 font-medium">
+                    Saved with these changes
+                    <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setConvertNotes([])}>
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                  <ul className="list-disc pl-4">{convertNotes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                </div>
+              )}
+
               {needsPassword && (
                 <PasswordUnlock
                   onSubmit={(pw) => setPassword(active.id, pw)}
@@ -1017,6 +1078,8 @@ function ConnectionForm({
 }) {
   const [c, setC] = useState<DbConnection>(initial);
   const [pastedPassword, setPastedPassword] = useState<string | undefined>();
+  /** What a connection-string conversion changed or dropped. */
+  const [convertNotes, setConvertNotes] = useState<string[]>([]);
   const patch = (p: Partial<DbConnection>) => setC((cur) => ({ ...cur, ...p }));
   const isFile = c.engine === "sqlite";
 
@@ -1064,6 +1127,29 @@ function ConnectionForm({
                   Passed straight to the driver — expected format: <span className="mono">{RAW_HINT[c.engine]}</span>.
                   Not saved to disk (may contain a password); re-paste it each session.
                 </Hint>
+                {c.engine === "mssql" && (c.rawConnString ?? "").trim() && (
+                  <div className="flex flex-col gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="self-start"
+                      onClick={() => {
+                        try {
+                          const { conn: next, password, notes } = convertRawConnection(c);
+                          setC(next);
+                          if (password) setPastedPassword(password);
+                          setConvertNotes(notes);
+                        } catch (e) {
+                          toast.error((e as Error).message);
+                        }
+                      }}
+                    >
+                      Convert to fields
+                    </Button>
+                    <Hint>Fills the form below from the string so the connection is saved and reusable. The password moves to the session-only box.</Hint>
+                    {convertNotes.map((n, i) => <p key={i} className="text-[11px] text-muted-foreground">• {n}</p>)}
+                  </div>
+                )}
               </Field>
             ) : (
               <>
@@ -1135,10 +1221,33 @@ function ConnectionForm({
                 )}
 
                 {c.engine === "mssql" && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={c.trustServerCertificate !== false} onChange={(e) => patch({ trustServerCertificate: e.target.checked })} />
-                    Trust server certificate (needed for local/self-signed)
-                  </label>
+                  <>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={c.trustServerCertificate !== false} onChange={(e) => patch({ trustServerCertificate: e.target.checked })} />
+                      Trust server certificate (needed for local/self-signed)
+                    </label>
+                    {c.trustServerCertificate === false && (
+                      <Hint>
+                        The server's certificate will be verified. A self-signed or mismatched certificate will now be
+                        rejected rather than accepted silently.
+                      </Hint>
+                    )}
+                    <Field label="Encryption">
+                      <select
+                        value={c.encrypt === undefined ? "" : String(c.encrypt)}
+                        onChange={(e) => patch({ encrypt: e.target.value === "" ? undefined : e.target.value === "true" })}
+                        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                      >
+                        <option value="">Driver default</option>
+                        <option value="true">Required (Encrypt=true)</option>
+                        <option value="false">Off (Encrypt=false)</option>
+                      </select>
+                      <Hint>
+                        Only sent when you choose one. A server with no certificate configured refuses
+                        <span className="mono"> Encrypt=true</span>, so there is no safe default to impose.
+                      </Hint>
+                    </Field>
+                  </>
                 )}
               </>
             )}

@@ -4,6 +4,7 @@ import {
   splitServerAddress,
   formatServerAddress,
   explainMssqlError,
+  convertRawConnection,
 } from "./mssqlConn";
 import { buildConnString, connTarget, connectionProblems, looksLikeSecret, type DbConnection } from "./dbTypes";
 
@@ -112,6 +113,87 @@ describe("parseMssqlConnString", () => {
     expect(built).toContain("Server=tcp:db01,1433");
     expect(built).toContain("Database=App");
     expect(built).toContain("Password=p");
+  });
+});
+
+describe("encryption and dropped keys", () => {
+  it("reads Encrypt", () => {
+    expect(parseMssqlConnString("Server=h;Encrypt=True").conn.encrypt).toBe(true);
+    expect(parseMssqlConnString("Server=h;Encrypt=False").conn.encrypt).toBe(false);
+    expect(parseMssqlConnString("Server=h").conn.encrypt).toBeUndefined();
+  });
+
+  it("sends Encrypt only when it was chosen", () => {
+    const base: DbConnection = { id: "1", name: "n", engine: "mssql", host: "h", port: 1433, database: "d", user: "u" };
+    expect(buildConnString(base, "p")).not.toContain("Encrypt=");
+    expect(buildConnString({ ...base, encrypt: true }, "p")).toContain("Encrypt=true");
+    expect(buildConnString({ ...base, encrypt: false }, "p")).toContain("Encrypt=false");
+  });
+
+  it("names the keys it drops", () => {
+    const notes = parseMssqlConnString("Server=h;MultiSubnetFailover=True;Replication=True;Odd Key=1").notes;
+    expect(notes.join(" ")).toContain("Odd Key");
+  });
+
+  it("stays quiet about client-side keys that change nothing", () => {
+    const notes = parseMssqlConnString(
+      'Data Source=h;Persist Security Info=True;Pooling=False;MultipleActiveResultSets=False;Application Name="SQL Server Management Studio";Command Timeout=0',
+    ).notes;
+    expect(notes.join(" ")).not.toContain("Not carried over");
+  });
+});
+
+describe("convertRawConnection", () => {
+  const raw: DbConnection = {
+    id: "abc",
+    name: "tradelab",
+    engine: "mssql",
+    usesRawConnString: true,
+    rawConnString:
+      'Data Source=192.168.0.7;Persist Security Info=True;User ID=sa;Password=hunter2;Pooling=False;Encrypt=True;TrustServerCertificate=True;Application Name="SQL Server Management Studio"',
+    safeMode: true,
+  };
+
+  it("moves the server details into saved fields", () => {
+    const { conn } = convertRawConnection(raw);
+    expect(conn).toMatchObject({
+      id: "abc",
+      name: "tradelab",
+      host: "192.168.0.7",
+      port: 1433,
+      user: "sa",
+      encrypt: true,
+      trustServerCertificate: true,
+      usesRawConnString: false,
+    });
+  });
+
+  it("leaves the password out of the saved connection", () => {
+    const { conn, password } = convertRawConnection(raw);
+    expect(password).toBe("hunter2");
+    expect(JSON.stringify(conn)).not.toContain("hunter2");
+    expect(conn.rawConnString).toBeUndefined();
+  });
+
+  it("keeps the connection's own settings that the string says nothing about", () => {
+    expect(convertRawConnection(raw).conn.safeMode).toBe(true);
+  });
+
+  it("produces a connection string equivalent to the one it replaced", () => {
+    const { conn, password } = convertRawConnection(raw);
+    const built = buildConnString(conn, password ?? "");
+    expect(built).toContain("Server=tcp:192.168.0.7,1433");
+    expect(built).toContain("User Id=sa");
+    expect(built).toContain("Password=hunter2");
+    expect(built).toContain("Encrypt=true");
+  });
+
+  it("refuses an engine with no parser", () => {
+    expect(() => convertRawConnection({ ...raw, engine: "postgres" })).toThrow(/SQL Server/);
+  });
+
+  it("reports an unparseable string rather than saving a broken connection", () => {
+    expect(() => convertRawConnection({ ...raw, rawConnString: "nonsense" })).toThrow(/No server found/);
   });
 });
 

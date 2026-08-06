@@ -27,6 +27,11 @@ export interface DbConnection {
   integratedSecurity?: boolean;
   /** SQL Server: trust a self-signed server certificate (default true for local dev) */
   trustServerCertificate?: boolean;
+  /**
+   * SQL Server: request an encrypted connection. Left undefined the driver decides,
+   * which is what most local servers want; SSMS strings usually spell it out.
+   */
+  encrypt?: boolean;
   /** Bypass the individual fields and use a raw, engine-native connection string. */
   usesRawConnString?: boolean;
   /** The raw connection string — session-only, never persisted (may contain a password). */
@@ -94,6 +99,9 @@ export function buildConnString(conn: DbConnection, password: string): string {
     parts.push(`User Id=${conn.user || ""}`, `Password=${password || ""}`);
   }
   parts.push(`TrustServerCertificate=${conn.trustServerCertificate === false ? "false" : "true"}`);
+  // Only stated when the user stated it: a server with no certificate configured
+  // refuses `Encrypt=true`, so defaulting it either way breaks somebody.
+  if (conn.encrypt !== undefined) parts.push(`Encrypt=${conn.encrypt}`);
   return parts.join(";") + ";";
 }
 
