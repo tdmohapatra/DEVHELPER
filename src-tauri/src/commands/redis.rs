@@ -5,11 +5,18 @@ use std::time::Duration;
 
 /// Execute a single Redis command via a minimal RESP client (no external crate).
 /// `args` is the full command, e.g. ["GET", "mykey"]. Returns the reply as JSON.
+///
+/// Each call opens its own connection, so anything that depends on connection
+/// state — MULTI, WATCH, SUBSCRIBE — cannot span two calls. `db` is the one piece
+/// of that state worth carrying: it is applied with SELECT on this connection
+/// before the command runs, so key operations address the database the caller
+/// meant rather than always database 0.
 #[tauri::command]
 pub fn redis_exec(
     host: String,
     port: u16,
     password: Option<String>,
+    db: Option<u32>,
     args: Vec<String>,
 ) -> Result<Value, String> {
     let addr = format!("{host}:{port}");
@@ -23,6 +30,13 @@ pub fn redis_exec(
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         write_command(&mut writer, &["AUTH".to_string(), pw])?;
         read_reply(&mut reader)?; // consume AUTH reply (errors surface here)
+    }
+
+    // SELECT is skipped for database 0: it is already the default, and a server
+    // in cluster mode rejects SELECT outright even for 0.
+    if let Some(index) = db.filter(|d| *d != 0) {
+        write_command(&mut writer, &["SELECT".to_string(), index.to_string()])?;
+        read_reply(&mut reader)?;
     }
 
     write_command(&mut writer, &args)?;
