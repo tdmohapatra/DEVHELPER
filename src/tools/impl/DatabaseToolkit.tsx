@@ -82,6 +82,7 @@ import { formatSql } from "@/tools/lib/sql";
 import { CodeEditor, type EditorMarker } from "@/components/CodeEditor";
 import { DbObjectDetails } from "@/tools/impl/DbObjectDetails";
 import { DbMonitor } from "@/tools/impl/DbMonitor";
+import { DbSchemaDiff } from "@/tools/impl/DbSchemaDiff";
 import {
   inferColumns,
   toCsharpClass,
@@ -92,7 +93,7 @@ import {
   toInsert,
 } from "@/tools/lib/dbCodegen";
 
-type Tab = "explorer" | "query" | "monitor";
+type Tab = "explorer" | "query" | "monitor" | "diff";
 type CodeGen = "csharp-class" | "csharp-record" | "ef-entity" | "ts-interface" | "json";
 
 const OBJECT_ICON = { table: Table2, view: Eye, procedure: FunctionSquare, function: FunctionSquare } as const;
@@ -813,7 +814,7 @@ export function DatabaseToolkit() {
 
               {/* Tabs */}
               <div className="flex gap-1 border-b border-border">
-                {(["query", "explorer", "monitor"] as const).map((t) => (
+                {(["query", "explorer", "monitor", "diff"] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => { setTab(t); if (t === "explorer" && objects.length === 0) loadObjects(); }}
@@ -869,6 +870,8 @@ export function DatabaseToolkit() {
                 </div>
               ) : tab === "monitor" ? (
                 <DbMonitor engine={active.engine} runSql={runSql} />
+              ) : tab === "diff" ? (
+                <DbSchemaDiff />
               ) : (
                 <div className="flex flex-col gap-2">
                   <CodeEditor
