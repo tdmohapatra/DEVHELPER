@@ -21,6 +21,8 @@ import {
   KeyRound,
   Wand2,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -52,6 +54,14 @@ import {
   type DbObject,
   type QueryResult,
 } from "@/tools/lib/dbTypes";
+import {
+  pageableStatement,
+  pagedSql,
+  countSql,
+  pageLabel,
+  lastPageIndex,
+  type PageableQuery,
+} from "@/tools/lib/dbPaging";
 import {
   parseMssqlConnString,
   formatServerAddress,
@@ -208,6 +218,16 @@ export function DatabaseToolkit() {
   const [databases, setDatabases] = useState<string[]>([]);
   const [loadingDbs, setLoadingDbs] = useState(false);
   const [details, setDetails] = useState<DbObject | null>(null);
+  // Server-side paging for the editor result. `paged` is the statement captured at
+  // run time, so the pager keeps walking the query that produced the grid even after
+  // the editor text is edited. Null means the statement was not pageable.
+  const [paged, setPaged] = useState<PageableQuery | null>(null);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState<number | null>(null);
+  /** Page size frozen at run time — editing Max rows must not shift the offsets mid-walk. */
+  const [pageSize, setPageSize] = useState(1000);
+  /** Bumped per run so a slow COUNT(*) cannot land on a later query's result. */
+  const runToken = useRef(0);
 
   const runSql = useCallback(
     async (sql: string, maxRows = 200): Promise<QueryResult> => {
@@ -417,6 +437,7 @@ export function DatabaseToolkit() {
     upsert({ ...active, database: name });
     setObjects([]);
     setResult(null);
+    setPaged(null);
     toast.success(`Database → ${name}`);
   }
 
@@ -448,6 +469,14 @@ export function DatabaseToolkit() {
       setConfirmRisk(true);
       return;
     }
+    // A single windowless SELECT can be walked page by page instead of being cut
+    // off at Max rows. Anything else runs exactly as written.
+    const q = pageableStatement(sql);
+    const token = ++runToken.current;
+    setPaged(q);
+    setPage(0);
+    setTotal(null);
+    setPageSize(maxRows);
     setBusy("query");
     setError("");
     setResult(null);
@@ -455,18 +484,63 @@ export function DatabaseToolkit() {
       const r = await invokeNative<QueryResult>("db_query", {
         engine: active.engine,
         connStr: connString(),
-        sql,
+        sql: q ? pagedSql(active.engine, q, 0, maxRows) : sql,
         maxRows,
       });
       setResult(r);
       setConfirmRisk(false);
       mark(active.id, { state: "ok", version: activeStatus.version });
       pushHistory({ connId: active.id, sql, ok: true, rowCount: r.rowCount });
+      // A total makes the pager exact. Without one it can still step forward for
+      // as long as pages come back full, so this stays best-effort.
+      if (q) loadTotal(q, token);
     } catch (e) {
       const msg = (e as Error).message;
       mark(active.id, { state: "fail", error: msg });
       setError(msg);
+      setPaged(null);
       pushHistory({ connId: active.id, sql, ok: false });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Row count for the whole result set, in the background.
+   *
+   * Deliberately silent on failure: COUNT(*) has to wrap the statement in a
+   * derived table, which a query with duplicate column names rejects. An
+   * unknown total is a working pager, not an error worth showing.
+   */
+  async function loadTotal(q: PageableQuery, token: number) {
+    if (!active) return;
+    const sql = countSql(active.engine, q);
+    if (!sql) return;
+    try {
+      const c = await invokeNative<QueryResult>("db_query", { engine: active.engine, connStr: connString(), sql, maxRows: 1 });
+      const n = Number(c.rows[0]?.[0]);
+      if (Number.isFinite(n) && runToken.current === token) setTotal(n);
+    } catch {
+      /* total stays unknown */
+    }
+  }
+
+  /** Re-run the captured statement windowed to another page. */
+  async function goPage(p: number) {
+    if (!active || !paged || p < 0 || busy !== null) return;
+    setBusy("query");
+    setError("");
+    try {
+      const r = await invokeNative<QueryResult>("db_query", {
+        engine: active.engine,
+        connStr: connString(),
+        sql: pagedSql(active.engine, paged, p * pageSize, pageSize),
+        maxRows: pageSize,
+      });
+      setResult(r);
+      setPage(p);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -480,6 +554,10 @@ export function DatabaseToolkit() {
 
 
   const filteredObjects = objects.filter((o) => o.name.toLowerCase().includes(objFilter.toLowerCase()));
+
+  const lastPage = lastPageIndex(total, pageSize);
+  // With no total, a full page is the only evidence that more rows may exist.
+  const atLastPage = lastPage !== null ? page >= lastPage : (result?.rows.length ?? 0) < pageSize;
 
   return (
     <ToolShell
@@ -854,6 +932,25 @@ export function DatabaseToolkit() {
                       <Input type="number" value={maxRows} min={1} max={5000} onChange={(e) => setMaxRows(Math.max(1, Math.min(5000, Number(e.target.value) || 1000)))} className="h-8 w-24" />
                     </label>
                   </div>
+
+                  {result && paged && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <Button size="sm" variant="outline" className="h-7" disabled={busy !== null || page === 0} onClick={() => goPage(page - 1)}>
+                        <ChevronLeft className="size-3.5" /> Prev
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7" disabled={busy !== null || atLastPage} onClick={() => goPage(page + 1)}>
+                        Next <ChevronRight className="size-3.5" />
+                      </Button>
+                      <span>{pageLabel(page * pageSize, result.rows.length, total)}</span>
+                      {lastPage !== null && <span>· page {page + 1} of {lastPage + 1}</span>}
+                      <Button size="sm" variant="ghost" className="h-7" title="Reload this page" onClick={() => goPage(page)}>
+                        <RefreshCw className={cn("size-3.5", busy === "query" && "animate-spin")} />
+                      </Button>
+                      {(total === null || total > result.rows.length) && (
+                        <span className="text-[11px]">Copy and export cover this page only.</span>
+                      )}
+                    </div>
+                  )}
 
                   {result && (
                     <ResultView
