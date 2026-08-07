@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { BindingOverrides } from "@/lib/keybindings";
 
 export type Theme = "dark" | "light";
 
@@ -27,6 +28,11 @@ interface AppState {
   openGroups: string[];
   /** Activity log dock: hidden entirely, collapsed to its status bar, or open. */
   logDock: "hidden" | "bar" | "open";
+  /**
+   * Keyboard bindings the user has changed, as action id → combo.
+   * An empty string means deliberately unbound; an absent key means "use the default".
+   */
+  keyOverrides: BindingOverrides;
 
   toggleTheme: () => void;
   setTheme: (t: Theme) => void;
@@ -40,6 +46,9 @@ interface AppState {
   setLogDock: (state: AppState["logDock"]) => void;
   /** Open the dock if it is not already, otherwise collapse it back to the bar. */
   toggleLogDock: () => void;
+  /** Rebind an action. Pass "" to unbind it, or null to restore the default. */
+  setKeyOverride: (actionId: string, combo: string | null) => void;
+  resetKeyOverrides: () => void;
 }
 
 const RECENT_LIMIT = 12;
@@ -78,6 +87,7 @@ export const useAppStore = create<AppState>()(
       sidebarCollapsed: false,
       openGroups: [],
       logDock: "bar",
+      keyOverrides: {},
 
       toggleTheme: () => {
         const next = get().theme === "dark" ? "light" : "dark";
@@ -120,6 +130,14 @@ export const useAppStore = create<AppState>()(
         })),
       setLogDock: (logDock) => set({ logDock }),
       toggleLogDock: () => set((s) => ({ logDock: s.logDock === "open" ? "bar" : "open" })),
+      setKeyOverride: (actionId, combo) =>
+        set((s) => {
+          const next = { ...s.keyOverrides };
+          if (combo === null) delete next[actionId];
+          else next[actionId] = combo;
+          return { keyOverrides: next };
+        }),
+      resetKeyOverrides: () => set({ keyOverrides: {} }),
     }),
     {
       name: "devhelper-app",
@@ -130,6 +148,7 @@ export const useAppStore = create<AppState>()(
         sidebarCollapsed: s.sidebarCollapsed,
         openGroups: s.openGroups,
         logDock: s.logDock,
+        keyOverrides: s.keyOverrides,
       }),
       onRehydrateStorage: () => (state) => {
         // Apply persisted theme to the <html> element on load.

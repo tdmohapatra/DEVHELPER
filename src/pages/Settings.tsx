@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload, RefreshCw, KeyRound } from "lucide-react";
+import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload, RefreshCw, KeyRound, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -24,6 +24,20 @@ import {
   STORES,
 } from "@/lib/workspace";
 import { checkForUpdate, installUpdate, type UpdateState } from "@/lib/updates";
+import { getTool, TOOLS } from "@/tools/registry";
+import { cn } from "@/lib/utils";
+import {
+  APP_COMMANDS,
+  DEFAULT_BINDINGS,
+  actionId,
+  actionLabel,
+  comboFromEvent,
+  comboProblem,
+  findConflicts,
+  formatCombo,
+  resolveBindings,
+  type BindingAction,
+} from "@/lib/keybindings";
 
 export function Settings() {
   const theme = useAppStore((s) => s.theme);
@@ -110,6 +124,8 @@ export function Settings() {
         </CardContent>
       </Card>
 
+      <ShortcutsCard />
+
       <WorkspaceCard />
 
       <Card>
@@ -126,6 +142,133 @@ export function Settings() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Rebinding keyboard shortcuts.
+ *
+ * The shipped bindings are only defaults. A combination the OS or another app
+ * has already taken is otherwise simply unavailable, with nothing to be done
+ * about it, and conflicts between two DevHelper bindings used to be decided by
+ * iteration order — which is how a shortcut becomes something that works on
+ * Tuesdays. Both are now visible and fixable.
+ */
+function ShortcutsCard() {
+  const overrides = useAppStore((s) => s.keyOverrides);
+  const setOverride = useAppStore((s) => s.setKeyOverride);
+  const resetAll = useAppStore((s) => s.resetKeyOverrides);
+  const [capturing, setCapturing] = useState<string | null>(null);
+  const [problem, setProblem] = useState("");
+
+  const bindings = useMemo(() => resolveBindings(DEFAULT_BINDINGS, overrides), [overrides]);
+  const conflicts = useMemo(() => findConflicts(bindings), [bindings]);
+  const conflicted = new Set(conflicts.map((c) => c.combo));
+  const nameOf = (id: string) => getTool(id)?.name;
+
+  // Every bindable action, whether or not it currently has a combination.
+  const rows = useMemo(() => {
+    const all = [
+      ...APP_COMMANDS.map((c) => ({ action: { kind: "command", id: c.id } as BindingAction })),
+      ...TOOLS.filter((t) => t.shortcut).map((t) => ({ action: { kind: "tool", toolId: t.id } as BindingAction })),
+    ];
+    return all.map(({ action }) => {
+      const id = actionId(action);
+      return {
+        id,
+        action,
+        label: actionLabel(action, nameOf),
+        combo: bindings.find((b) => actionId(b.action) === id)?.combo ?? "",
+        overridden: overrides[id] !== undefined,
+      };
+    });
+  }, [bindings, overrides]);
+
+  const onCapture = (id: string) => (e: React.KeyboardEvent) => {
+    e.preventDefault();
+    if (e.key === "Escape") { setCapturing(null); setProblem(""); return; }
+    const combo = comboFromEvent(e.nativeEvent);
+    if (!combo) return; // a modifier on its own; keep waiting
+    const issue = comboProblem(combo);
+    if (issue) { setProblem(issue); return; }
+    setOverride(id, combo);
+    setCapturing(null);
+    setProblem("");
+  };
+
+  return (
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Keyboard className="size-4" /> Keyboard shortcuts</CardTitle>
+        <CardDescription>
+          Click a shortcut and press the keys you want. Escape cancels. Bindings match the physical key, so they do not
+          move when the keyboard layout does.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {conflicts.length > 0 && (
+          <div className="rounded-md border border-warning/40 bg-warning/5 p-2 text-[11px]">
+            {conflicts.map((c) => (
+              <p key={c.combo}>
+                <ShieldAlert className="mr-1 inline size-3 text-warning" />
+                <b>{formatCombo(c.combo)}</b> is bound to {c.actions.map((a) => actionLabel(a, nameOf)).join(" and ")} —
+                which one wins is not defined.
+              </p>
+            ))}
+          </div>
+        )}
+
+        <div className="divide-y divide-border rounded-md border border-border">
+          {rows.map((row) => (
+            <div key={row.id} className="flex items-center gap-2 px-2 py-1.5 text-sm">
+              <span className="min-w-0 flex-1 truncate">{row.label}</span>
+              {row.overridden && <Badge variant="outline" className="text-[10px]">changed</Badge>}
+              <button
+                onKeyDown={capturing === row.id ? onCapture(row.id) : undefined}
+                onClick={() => { setCapturing(row.id); setProblem(""); }}
+                onBlur={() => capturing === row.id && setCapturing(null)}
+                className={cn(
+                  "min-w-[9rem] rounded border px-2 py-0.5 text-center font-mono text-[11px]",
+                  capturing === row.id
+                    ? "border-primary bg-primary/10 text-primary"
+                    : conflicted.has(row.combo)
+                      ? "border-warning/50 text-warning"
+                      : "border-border text-muted-foreground hover:bg-secondary",
+                )}
+              >
+                {capturing === row.id ? "Press keys…" : row.combo ? formatCombo(row.combo) : "unbound"}
+              </button>
+              <button
+                onClick={() => setOverride(row.id, "")}
+                disabled={!row.combo}
+                title="Unbind"
+                className="text-muted-foreground hover:text-destructive disabled:opacity-30"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+              <button
+                onClick={() => setOverride(row.id, null)}
+                disabled={!row.overridden}
+                title="Restore the default"
+                className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+              >
+                <RefreshCw className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {problem && <p className="text-[11px] text-warning">{problem}</p>}
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={resetAll} disabled={Object.keys(overrides).length === 0}>
+            Restore all defaults
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            Unbinding is remembered, so a key you deliberately freed stays free when a release changes its default.
+          </span>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

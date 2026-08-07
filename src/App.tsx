@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
@@ -11,10 +11,15 @@ import { Dashboard } from "@/pages/Dashboard";
 import { ToolList } from "@/pages/ToolList";
 import { Settings } from "@/pages/Settings";
 import { useAppStore, viewFromHash } from "@/stores/useAppStore";
-import { getTool, TOOLS } from "@/tools/registry";
+import { getTool } from "@/tools/registry";
+import {
+  DEFAULT_BINDINGS,
+  comboFromEvent,
+  matchBinding,
+  resolveBindings,
+  shouldIgnoreTarget,
+} from "@/lib/keybindings";
 
-/** Map of "Ctrl+Shift+X" shortcut strings to tool ids for global hotkeys. */
-const SHORTCUTS = new Map(TOOLS.filter((t) => t.shortcut).map((t) => [t.shortcut!, t.id]));
 
 function Content() {
   const view = useAppStore((s) => s.view);
@@ -40,6 +45,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openTool = useAppStore((s) => s.openTool);
   const openView = useAppStore((s) => s.openView);
+  const keyOverrides = useAppStore((s) => s.keyOverrides);
+  const bindings = useMemo(() => resolveBindings(DEFAULT_BINDINGS, keyOverrides), [keyOverrides]);
 
   // Deep-linking: honour the URL hash on load and on manual hash changes.
   useEffect(() => {
@@ -73,39 +80,33 @@ export default function App() {
     };
   }, []);
 
+  // Every shortcut resolves through the same table, so a rebind in Settings
+  // takes effect everywhere and conflicts are detectable rather than emergent.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Ctrl+` → activity log dock.
-      if (e.ctrlKey && (e.key === "`" || e.code === "Backquote")) {
-        e.preventDefault();
-        useAppStore.getState().toggleLogDock();
+      const combo = comboFromEvent(e);
+      if (!combo || shouldIgnoreTarget(e.target, combo)) return;
+      const action = matchBinding(bindings, combo);
+      if (!action) return;
+      e.preventDefault();
+      if (action.kind === "tool") {
+        openTool(action.toolId);
         return;
       }
-      // Ctrl+B → show or hide the sidebar, for when the screen is needed.
-      if (e.ctrlKey && !e.shiftKey && (e.key === "b" || e.code === "KeyB")) {
-        e.preventDefault();
-        useAppStore.getState().toggleSidebar();
-        return;
-      }
-      // Ctrl+K or Ctrl+Space → command palette.
-      if (e.ctrlKey && (e.key === "k" || e.code === "Space")) {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-        return;
-      }
-      // Ctrl+Shift+<letter> → tool shortcuts.
-      if (e.ctrlKey && e.shiftKey && e.key.length === 1) {
-        const combo = `Ctrl+Shift+${e.key.toUpperCase()}`;
-        const toolId = SHORTCUTS.get(combo);
-        if (toolId) {
-          e.preventDefault();
-          openTool(toolId);
-        }
+      const store = useAppStore.getState();
+      switch (action.id) {
+        case "palette":
+        case "paletteAlt": setPaletteOpen((o) => !o); break;
+        case "sidebar": store.toggleSidebar(); break;
+        case "logs": store.toggleLogDock(); break;
+        case "theme": store.toggleTheme(); break;
+        case "dashboard": store.openView({ kind: "dashboard" }); break;
+        case "settings": store.openView({ kind: "settings" }); break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openTool]);
+  }, [openTool, bindings]);
 
   const view = useAppStore((s) => s.view);
   const viewKey = view.kind === "tool" ? `tool:${view.toolId}` : view.kind;
