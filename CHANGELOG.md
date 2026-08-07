@@ -5,6 +5,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Messaging tools feed the Debug Session; RabbitMQ rebuilt
+- **Capture from Redis, NATS and RabbitMQ** — the last tools that could not put anything
+  on the Debug Session timeline now can. A broker snapshot's status is the worst thing in
+  it, so one bad finding makes the whole event an error; the findings go into the event's
+  error text and the numbers into its payload. New `mqCapture.ts` (+21 tests) with
+  builders for a Redis health snapshot, a Redis console command, a NATS server snapshot,
+  a RabbitMQ broker snapshot, a publish, and "the broker was not reachable at all" —
+  which is worth distinguishing from "the broker is unhealthy" on a timeline.
+- **RabbitMQ rebuilt as an operator tool**, matching what Redis and NATS already got.
+  Overview / Queues / Exchanges / Nodes / Publish tabs, typed management-API shapes, and
+  `brokerFindings()` for the things RabbitMQ discards quietly: a backlog with no consumer,
+  messages delivered but never acked, flow control throttling publishers, a redelivery
+  loop with no dead-letter exchange, a filling DLQ, a length or TTL limit with nowhere to
+  dead-letter to, unroutable publishes, and node memory / disk / file-descriptor alarms.
+- **Publishing now reports whether the message was actually routed.** The management API
+  returns `routed: false` when nothing was bound for that key — the broker accepts the
+  publish and then discards it. That used to show as a success toast.
+- **Wrong-port guidance for RabbitMQ**, the same shape NATS has: 5672 is the AMQP port and
+  does not speak HTTP, and the management API only exists once the plugin is enabled.
+  One click switches the address to 15672. Queues are ordered by what needs attention.
+- New `rabbitMonitor.ts` (+41 tests). 1117 JS tests total.
+
 ### Added — Toolchain Manager (replaces the Environment Checker)
 - The `environment-checker` tool is now a full **Toolchain Manager**: a 59-tool catalog
   covering the whole stack (.NET / Node / Angular / Python / Java / Go / Rust, Visual

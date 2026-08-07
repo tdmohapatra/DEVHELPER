@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { cn } from "@/lib/utils";
 import { executeRequest } from "@/lib/http";
 import { NativeNotice } from "@/components/NativeNotice";
@@ -26,6 +27,7 @@ import {
   type Severity,
   type Varz,
 } from "@/tools/lib/natsMonitor";
+import { brokerUnreachableEvent, natsServerEvent } from "@/tools/lib/mqCapture";
 
 type Tab = "overview" | "jetstream" | "connections" | "subjects" | "raw";
 
@@ -197,16 +199,22 @@ export function NatsTool() {
       {error && (
         <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
           <p>{error}</p>
-          {withMonitorPort(server) !== server.trim() && (
-            <Button
-              size="sm"
+          <div className="mt-2 flex flex-wrap gap-2">
+            {withMonitorPort(server) !== server.trim() && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => { const next = withMonitorPort(server); setServer(next); setError(""); }}
+              >
+                Use {withMonitorPort(server)} instead
+              </Button>
+            )}
+            <AddToDebug
               variant="outline"
-              className="mt-2"
-              onClick={() => { const next = withMonitorPort(server); setServer(next); setError(""); }}
-            >
-              Use {withMonitorPort(server)} instead
-            </Button>
-          )}
+              label="Add to Debug"
+              makeEvent={() => brokerUnreachableEvent("nats", server.trim() || "nats", error)}
+            />
+          </div>
         </div>
       )}
 
@@ -225,7 +233,24 @@ export function NatsTool() {
                 {t.icon} {t.label}
               </button>
             ))}
-            <Button size="sm" variant="ghost" className="ml-auto" onClick={refresh}>
+            <AddToDebug
+              className="ml-auto"
+              variant="ghost"
+              label="Debug"
+              makeEvent={() =>
+                natsServerEvent({
+                  target: server.trim(),
+                  serverName: varz?.server_name,
+                  version: varz?.version,
+                  connections: varz?.connections,
+                  slowConsumers: varz?.slow_consumers,
+                  streams: jsz?.streams,
+                  consumers: jsz?.consumers,
+                  findings,
+                })
+              }
+            />
+            <Button size="sm" variant="ghost" onClick={refresh}>
               <RefreshCw className={cn("size-3.5", busy && "animate-spin")} /> Refresh
             </Button>
           </div>

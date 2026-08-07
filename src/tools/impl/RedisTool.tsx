@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/CopyButton";
+import { AddToDebug } from "@/components/AddToDebug";
 import { NativeNotice } from "@/components/NativeNotice";
 import { invokeNative, isTauri } from "@/lib/platform";
 import { toast } from "@/components/ui/toast";
@@ -33,6 +34,7 @@ import {
   type SlowlogEntry,
   type PubSubChannel,
 } from "@/tools/lib/redisClients";
+import { brokerUnreachableEvent, redisCommandEvent, redisHealthEvent } from "@/tools/lib/mqCapture";
 
 type Tab = "keys" | "health" | "clients" | "pubsub" | "slowlog" | "console";
 
@@ -244,6 +246,8 @@ export function RedisTool() {
 
   const metrics = info ? healthMetrics(info) : [];
   const dbs = info ? parseKeyspace(info) : [];
+  /** How this server is named on a Debug Session timeline. */
+  const target = `redis://${host}:${port}/${db}`;
 
   return (
     <ToolShell
@@ -273,7 +277,17 @@ export function RedisTool() {
         )}
       </div>
 
-      {error && <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
+      {error && (
+        <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+          <p>{error}</p>
+          <AddToDebug
+            className="mt-2"
+            variant="outline"
+            label="Add to Debug"
+            makeEvent={() => brokerUnreachableEvent("redis", target, error)}
+          />
+        </div>
+      )}
 
       {connected && (
         <>
@@ -302,6 +316,22 @@ export function RedisTool() {
                   <span className="text-xs text-muted-foreground">
                     {totalKeys(dbs).toLocaleString()} keys across {dbs.length} database{dbs.length === 1 ? "" : "s"}
                   </span>
+                )}
+                {info && (
+                  <AddToDebug
+                    className="ml-auto"
+                    variant="ghost"
+                    label="Debug"
+                    makeEvent={() =>
+                      redisHealthEvent({
+                        target,
+                        version,
+                        metrics,
+                        keys: dbs.length ? totalKeys(dbs) : undefined,
+                        clients: clients?.length,
+                      })
+                    }
+                  />
                 )}
               </div>
 
@@ -559,7 +589,13 @@ export function RedisTool() {
                     <div className="flex items-center gap-2 border-b border-border px-2 py-1">
                       <span className="mono text-xs">{o.cmd}</span>
                       {!o.ok && <Badge variant="destructive" className="text-[10px]">error</Badge>}
-                      <CopyButton value={o.text} className="ml-auto" />
+                      <AddToDebug
+                        className="ml-auto"
+                        variant="ghost"
+                        label="Debug"
+                        makeEvent={() => redisCommandEvent(target, o.cmd, o.text, o.ok)}
+                      />
+                      <CopyButton value={o.text} />
                     </div>
                     <pre className={cn("mono max-h-60 overflow-auto p-2 text-[11px]", !o.ok && "text-destructive")}>{o.text}</pre>
                   </div>

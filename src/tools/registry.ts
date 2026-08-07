@@ -364,10 +364,14 @@ export const TOOLS: Tool[] = [
   {
     id: "rabbitmq",
     name: "RabbitMQ",
-    description: "Queues, exchanges and publishing (mgmt API)",
+    description: "Queues, exchanges, node headroom and publishing (mgmt API)",
     category: "messaging",
     icon: Rabbit,
-    keywords: ["rabbitmq", "amqp", "queue", "exchange", "message", "broker", "publish"],
+    keywords: [
+      "rabbitmq", "amqp", "queue", "exchange", "message", "broker", "publish", "dlq", "dead letter",
+      "unacked", "unacknowledged", "backlog", "consumer", "routing key", "unroutable", "flow control",
+      "memory alarm", "vhost", "management",
+    ],
     route: "/tools/rabbitmq",
     component: L(() => import("./impl/RabbitMqTool"), "RabbitMqTool"),
   },

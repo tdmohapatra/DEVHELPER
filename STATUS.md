@@ -103,7 +103,34 @@ works in browser + desktop.
 - [x] Visual service-flow diagram — Trace Explorer renders an SVG flow (status-colored nodes,
       latency-labelled edges) + Copy Mermaid export. `serviceEdges`/`toMermaidFlow` (+2 tests).
 - [x] Capture from Error Explainer / Stack Trace Analyzer (done earlier).
-- [ ] Capture from messaging tools (Redis/NATS/RabbitMQ).
+- [x] Capture from messaging tools (Redis/NATS/RabbitMQ) — done 2026-08-07, see below.
+
+---
+
+## 2026-08-07 — Messaging capture + RabbitMQ rebuilt
+
+Closes the last open item on the Debug Session flagship: every tool that can observe a
+distributed flow can now put what it sees on the timeline.
+
+- [x] `mqCapture.ts` — pure builders turning a broker's current state into a `ParsedEvent`:
+      Redis health snapshot, Redis console command, NATS server snapshot, RabbitMQ broker
+      snapshot, RabbitMQ publish, and `brokerUnreachableEvent` (not-reachable and
+      unhealthy look identical on a timeline unless one says so). A snapshot's status is
+      the worst finding in it. +21 tests.
+- [x] `rabbitMonitor.ts` — typed management-API shapes (overview/queues/exchanges/nodes)
+      plus `brokerFindings()` for what RabbitMQ discards quietly: backlog with no consumer,
+      all-unacked queues, flow control, redelivery loops, filling DLQs, limits with no
+      dead-letter exchange, unroutable publishes, node memory/disk/FD alarms. Also
+      `mgmtPortAdvice`/`withMgmtPort` (5672 vs 15672, plugin-not-enabled) and
+      `routingKeyProblem`. +41 tests.
+- [x] **RabbitMQ tool rebuilt** — 5 tabs, findings panel, attention-ordered queues, node
+      headroom, exchange-aware publish that reports `routed: false` instead of claiming
+      success. The old version was Phase-4 vintage (untyped `any`, two tables, no findings).
+- [x] Redis: Debug capture on the health view, on each console command, and on a failed
+      connection. NATS: capture of the server snapshot with its findings, and of a failed
+      connection.
+- [x] Verified: typecheck, **1117 JS tests** (was 1055), `vite build` clean. No native
+      changes. GUI not clicked (no browser/GUI harness) — logic covered by unit tests.
 
 ---
 
