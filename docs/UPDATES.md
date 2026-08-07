@@ -96,6 +96,16 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 5. Check the draft, then publish it. Nothing is offered to installed copies until
    you do — the feed reads `releases/latest`, and a draft is not latest.
 
+### If the release job failed
+
+Fix the cause, then re-run against the same tag — **Actions → Release → Run
+workflow**, and type the tag (e.g. `v0.2.0`) into the `tag` input. The tag does
+not need deleting and re-pushing.
+
+The input is required on purpose: on a manual run `github.ref_name` is the branch
+the run was launched from, so defaulting to it would build `main` and try to
+publish a release called "main".
+
 ## Building locally
 
 `createUpdaterArtifacts` makes the build require the signing key, so

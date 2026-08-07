@@ -7,9 +7,15 @@ on:
   push:
     tags:
       - "v*"
-  # Manual runs are for rehearsing the workflow. They still need a tag to
-  # exist, because the release is created against one.
+  # Manual runs re-release an existing tag — the case that matters is a tag
+  # whose first run failed, typically because a secret was missing. The tag has
+  # to be named explicitly: on a dispatch, `github.ref_name` is the branch, so
+  # defaulting to it would try to publish a release called "main".
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release, e.g. v0.2.0"
+        required: true
 
 permissions:
   contents: write
@@ -23,7 +29,12 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # On a dispatch, check out the tag that was named rather than the branch
+      # the workflow was launched from — otherwise a re-release builds whatever
+      # main happens to be, which is not what the tag says.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - uses: actions/setup-node@v4
         with:
@@ -63,8 +74,8 @@ jobs:
           # not the absence of the variable.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "DevHelper ${{ github.ref_name }}"
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "DevHelper ${{ inputs.tag || github.ref_name }}"
           releaseBody: "See CHANGELOG.md for what changed."
           # Published as a draft so the release can be read before it becomes
           # the thing every installed copy is offered.
