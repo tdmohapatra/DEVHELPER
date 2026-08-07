@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, Sparkles, TriangleAlert, ClipboardPaste, FolderPlus, Clock } from "lucide-react";
+import { Search, Sparkles, TriangleAlert, ClipboardPaste, FolderPlus, Clock, List, BarChart3, Lightbulb } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,6 +27,13 @@ import {
   type DebugStatus,
   type ServiceHop,
 } from "@/tools/lib/debugSession";
+import {
+  traceGaps,
+  traceInsights,
+  traceSpan,
+  waterfall,
+  type InsightSeverity,
+} from "@/tools/lib/traceAnalysis";
 
 const STATUS_DOT: Record<DebugStatus, string> = {
   ok: "bg-success",
@@ -89,6 +96,75 @@ function ServiceFlowSvg({ hops }: { hops: ServiceHop[] }) {
   );
 }
 
+const INSIGHT_STYLE: Record<InsightSeverity, string> = {
+  bad: "border-destructive/40 bg-destructive/5",
+  warn: "border-warning/40 bg-warning/5",
+  info: "border-border bg-secondary/20",
+};
+const INSIGHT_ICON: Record<InsightSeverity, string> = {
+  bad: "text-destructive",
+  warn: "text-warning",
+  info: "text-muted-foreground",
+};
+
+const BAR_STYLE: Record<DebugStatus, string> = {
+  ok: "bg-success",
+  error: "bg-destructive",
+  warn: "bg-warning",
+  info: "bg-primary/60",
+  pending: "bg-muted-foreground/40",
+};
+
+/**
+ * Events laid out proportionally across the span.
+ *
+ * The point of a waterfall over a list is that a gap is as visible as a step:
+ * four seconds of nothing between two services is the thing worth seeing, and a
+ * chronological list renders it as an unremarkable "+4000ms".
+ */
+function Waterfall({ events }: { events: DebugEvent[] }) {
+  const rows = waterfall(events);
+  const span = traceSpan(events).ms;
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center justify-between px-3 py-1 text-[10px] text-muted-foreground">
+        <span>0 ms</span>
+        <span>{span} ms</span>
+      </div>
+      {rows.map((r, i) => (
+        <div
+          key={r.event.id}
+          className={cn(
+            "flex items-center gap-2 px-3 py-1",
+            i > 0 && "border-t border-border",
+            r.event.status === "error" && "bg-destructive/5",
+          )}
+        >
+          <span className="w-40 shrink-0 truncate text-xs" title={`${r.event.service ? `${r.event.service} — ` : ""}${r.event.title}`}>
+            {r.event.service && <span className="text-muted-foreground">{r.event.service} </span>}
+            {r.event.title}
+          </span>
+          <div className="relative h-4 min-w-0 flex-1 rounded bg-secondary/40">
+            <div
+              className={cn(
+                "absolute top-0.5 h-3 rounded-sm",
+                BAR_STYLE[r.event.status],
+                // A point in time is drawn as a tick, not as a measured span.
+                r.instant && "opacity-60",
+              )}
+              style={{ left: `${r.leftPct}%`, width: `${Math.min(r.widthPct, 100 - r.leftPct)}%` }}
+              title={r.instant ? `at +${r.offsetMs} ms (no duration reported)` : `+${r.offsetMs} ms for ${r.durationMs} ms`}
+            />
+          </div>
+          <span className="w-20 shrink-0 text-right text-[11px] text-muted-foreground">
+            {r.instant ? `+${r.offsetMs} ms` : `${r.durationMs} ms`}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 let SYNTH = 0;
 const synthId = () => `trace-${++SYNTH}`;
 
@@ -123,6 +199,9 @@ export function TraceExplorer() {
 
   const hops = useMemo(() => serviceFlow(matches), [matches]);
   const summary = useMemo(() => traceSummary(matches), [matches]);
+  const insights = useMemo(() => traceInsights(matches), [matches]);
+  const gaps = useMemo(() => traceGaps(matches).slice(0, 3), [matches]);
+  const [view, setView] = useState<"waterfall" | "list">("waterfall");
 
   const suggestions = useMemo(() => {
     const ids = new Set<string>();
@@ -212,7 +291,8 @@ export function TraceExplorer() {
               {/* Summary */}
               <div className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3 text-sm">
                 <span className="font-medium">{matches.length} events</span>
-                <span className="flex items-center gap-1 text-muted-foreground"><Clock className="size-3.5" /> {summary.durationMs} ms span</span>
+                {/* Span, not last-start-minus-first-start: the final step's own duration counts. */}
+                <span className="flex items-center gap-1 text-muted-foreground"><Clock className="size-3.5" /> {traceSpan(matches).ms} ms span</span>
                 {summary.errors > 0 ? (
                   <Badge variant="destructive" className="gap-1"><TriangleAlert className="size-3" /> {summary.errors} error{summary.errors === 1 ? "" : "s"}</Badge>
                 ) : (
@@ -228,6 +308,44 @@ export function TraceExplorer() {
                   <Button size="sm" variant="ghost" onClick={openInSession}><FolderPlus /> Session</Button>
                 </div>
               </div>
+
+              {/* What the numbers add up to */}
+              {insights.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  {insights.map((ins, i) => (
+                    <div key={i} className={cn("flex gap-2 rounded-md border p-2", INSIGHT_STYLE[ins.severity])}>
+                      <Lightbulb className={cn("mt-0.5 size-3.5 shrink-0", INSIGHT_ICON[ins.severity])} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{ins.headline}</p>
+                        <p className="text-[11px] text-muted-foreground">{ins.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {gaps.length > 0 && (
+                <div className="rounded-md border border-border p-2">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Largest unaccounted gaps</div>
+                  <table className="w-full text-xs">
+                    <tbody className="divide-y divide-border">
+                      {gaps.map((g, i) => (
+                        <tr key={i}>
+                          <td className="py-1 pr-2 text-muted-foreground">{Math.round(g.pctOfSpan)}%</td>
+                          <td className="py-1 pr-2 font-medium">{g.ms} ms</td>
+                          <td className="truncate py-1 text-muted-foreground">
+                            after &ldquo;{g.after.title}&rdquo; → before &ldquo;{g.before.title}&rdquo;
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Measured from when the previous step finished, so time a step reported as its own duration is not
+                    counted twice. What is left is queue time, network time, or something not instrumented.
+                  </p>
+                </div>
+              )}
 
               {/* Service flow diagram */}
               {hops.length > 0 && (
@@ -248,8 +366,19 @@ export function TraceExplorer() {
               )}
 
               {/* Timeline */}
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Timeline</span>
+                <div className="ml-auto flex gap-1">
+                  <Button size="sm" variant={view === "waterfall" ? "secondary" : "ghost"} onClick={() => setView("waterfall")}>
+                    <BarChart3 /> Waterfall
+                  </Button>
+                  <Button size="sm" variant={view === "list" ? "secondary" : "ghost"} onClick={() => setView("list")}>
+                    <List /> List
+                  </Button>
+                </div>
+              </div>
               <div className="overflow-hidden rounded-md border border-border">
-                {matches.map((e, i) => {
+                {view === "waterfall" ? <Waterfall events={matches} /> : matches.map((e, i) => {
                   const label = DEBUG_SOURCES.find((s) => s.id === e.source)?.label ?? e.source;
                   const prev = i > 0 ? matches[i - 1].at : e.at;
                   const delta = e.at - prev;
