@@ -40,9 +40,6 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
-        // Registered unconditionally; without a `plugins.updater` config the
-        // check reports that no feed is set rather than silently doing nothing.
-        .plugin(tauri_plugin_updater::Builder::new().build())
         // Live WebSocket connections, owned by the Rust side and addressed by id.
         .manage(ws::WsRegistry::default())
         // Live NATS subscriptions, owned by Rust and addressed by id.

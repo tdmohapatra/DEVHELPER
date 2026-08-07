@@ -32,17 +32,8 @@
       "tooltip": "DevHelper"
     }
   },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI3NkMxNTMyQUVGMTE2Q0UKUldUT0Z2R3VNaFZzSjk0cDhzalIrYXYzVVBMOHM2dTFGNndHdkd6THVxaEkwUE1FZ3pIaGpjKzkK",
-      "endpoints": [
-        "https://github.com/tdmohapatra/DEVHELPER/releases/latest/download/latest.json"
-      ]
-    }
-  },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
     "targets": ["msi", "nsis"],
     "icon": [
       "icons/32x32.png",

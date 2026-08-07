@@ -23,7 +23,6 @@ import {
   storageFootprint,
   STORES,
 } from "@/lib/workspace";
-import { checkForUpdate, installUpdate, type UpdateState } from "@/lib/updates";
 import { getTool, TOOLS } from "@/tools/registry";
 import { cn } from "@/lib/utils";
 import {
@@ -138,7 +137,6 @@ export function Settings() {
             <Badge variant={isTauri() ? "success" : "secondary"}>{isTauri() ? "Desktop app" : "Browser dev mode"}</Badge>
           </div>
           <p>Local-first developer toolbox. No data leaves your machine unless you enable AI.</p>
-          <UpdateCheck />
         </CardContent>
       </Card>
     </div>
@@ -334,54 +332,6 @@ function RememberKey({ apiKey }: { apiKey: string }) {
           ? "Stored in the Windows Credential Manager, not in DevHelper's own data — a workspace backup does not contain it."
           : "Otherwise the key is kept in memory for this session only and retyped next launch."}
       </span>
-    </div>
-  );
-}
-
-/** Version check. Honest about being unconfigured rather than silently idle. */
-function UpdateCheck() {
-  const [state, setState] = useState<UpdateState | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [installing, setInstalling] = useState(false);
-
-  const check = async () => {
-    setBusy(true);
-    setState(await checkForUpdate(APP_VERSION));
-    setBusy(false);
-  };
-
-  const install = async () => {
-    setInstalling(true);
-    try {
-      await installUpdate();
-      toast.success("Update installed — DevHelper will restart");
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  return (
-    <div className="space-y-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" onClick={check} disabled={busy}>
-          <RefreshCw className={busy ? "animate-spin" : undefined} /> {busy ? "Checking…" : "Check for updates"}
-        </Button>
-        {state?.kind === "current" && <Badge variant="success">up to date</Badge>}
-        {state?.kind === "available" && (
-          <>
-            <Badge variant="warning">{state.version} available</Badge>
-            <Button size="sm" onClick={install} disabled={installing}>
-              {installing ? "Installing…" : "Install and restart"}
-            </Button>
-          </>
-        )}
-      </div>
-      {state?.kind === "available" && state.notes && <p className="text-xs">{state.notes}</p>}
-      {state && state.kind !== "current" && state.kind !== "available" && (
-        <p className="text-xs">{state.message}</p>
-      )}
     </div>
   );
 }

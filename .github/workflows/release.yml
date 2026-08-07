@@ -1,16 +1,16 @@
 name: Release
 
-# Publishing is tag-driven: pushing v* builds, signs and publishes a release
-# whose latest.json is what the in-app updater reads. Nothing publishes from a
-# branch push, so an ordinary commit can never advertise itself as an update.
+# Tag-driven: pushing v* builds the installers and creates a draft release.
+# Nothing publishes from a branch push, so an ordinary commit never produces a
+# release.
 on:
   push:
     tags:
       - "v*"
-  # Manual runs re-release an existing tag — the case that matters is a tag
-  # whose first run failed, typically because a secret was missing. The tag has
-  # to be named explicitly: on a dispatch, `github.ref_name` is the branch, so
-  # defaulting to it would try to publish a release called "main".
+  # Re-release an existing tag — the case that matters is a tag whose first run
+  # failed. The tag has to be named explicitly: on a dispatch,
+  # `github.ref_name` is the branch, so defaulting to it would build `main` and
+  # try to publish a release called "main".
   workflow_dispatch:
     inputs:
       tag:
@@ -41,20 +41,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Fail here rather than after a full release build. Without the secret
-      # the signing step dies on "Missing comment in secret key", roughly twelve
-      # minutes in, which reads as a signing bug rather than an absent secret.
-      - name: Check the signing key is available
-        shell: bash
-        env:
-          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Add it under Settings -> Secrets and variables -> Actions. See docs/UPDATES.md."
-            exit 1
-          fi
-          echo "Signing key present (${#KEY} characters)."
-
       - uses: dtolnay/rust-toolchain@stable
 
       # Rust builds here are long; without this every release recompiles every
@@ -73,29 +59,17 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build, sign and publish
+      # No signing key: releases are plain installers and DevHelper does not
+      # check for updates, so there is nothing to verify a signature against.
+      - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The updater refuses any release whose signature does not match the
-          # public key in tauri.conf.json, so this secret is what makes an
-          # update installable at all.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # Required even though the key has no password. Tauri always decrypts
-          # the key and prompts when this is unset — on a runner that means the
-          # job hangs at the prompt until it times out, with the last log line
-          # being "expect a prompt for password". An empty string is the answer,
-          # not the absence of the variable.
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "DevHelper ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See CHANGELOG.md for what changed."
-          # Published as a draft so the release can be read before it becomes
-          # the thing every installed copy is offered.
+          releaseBody: "See CHANGELOG.md for what changed. Download the .msi or the setup .exe below."
+          # Published as a draft so the artifacts can be checked before anyone is
+          # pointed at them.
           releaseDraft: true
           prerelease: false
-          # Emits latest.json alongside the installers. The updater endpoint
-          # points at `releases/latest/download/latest.json`, so this file has
-          # to be attached to the same release as the bundles it describes.
-          includeUpdaterJson: true

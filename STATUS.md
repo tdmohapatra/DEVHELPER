@@ -121,10 +121,13 @@ high; the gaps were all cross-cutting.
       environments, connections, snippets, debug sessions and projects are searchable and
       openable from `Ctrl+K`. Costs ~8 kB gzip on the startup bundle, since the palette
       now imports every store.
-- [x] **Desktop hygiene** — window state persisted, single-instance (registered first, so
-      a second launch raises the running window), and the updater plugin compiled in.
-      The updater is inert until a release feed and public key are configured; the check
-      says so rather than claiming to be up to date. See `docs/UPDATES.md`.
+- [x] **Desktop hygiene** — window state persisted, and single-instance (registered first,
+      so a second launch raises the running window).
+- [x] **Release pipeline** — `.github/workflows/release.yml` builds installers from a tag
+      into a draft release; `ci.yml` runs typecheck, both test suites, a frontend build and
+      clippy on every push. Auto-updating was wired and then removed in favour of plain
+      downloadable installers — no signing key to hold, nothing phoning home.
+      See `docs/RELEASES.md`.
 - [x] **OS credential storage** (`commands/secrets.rs`, `lib/secrets.ts`) — opt-in, keyed
       by server account, via Windows Credential Manager. DevHelper still writes no
       password of its own. The AI API key moved out of local storage, where a workspace

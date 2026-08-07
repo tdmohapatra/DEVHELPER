@@ -23,9 +23,6 @@ tauri-plugin-window-state = "2"
 # One DevHelper at a time: the tray icon and the global hotkey both exist to
 # raise the running window, and a second process makes both of them ambiguous.
 tauri-plugin-single-instance = "2"
-# Update checking. Inert until `plugins.updater` is configured in
-# tauri.conf.json with a release feed and public key — see docs/UPDATES.md.
-tauri-plugin-updater = "2"
 # Opt-in password storage in the OS credential store (Windows Credential
 # Manager here), so DevHelper still never writes a password to its own files.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
