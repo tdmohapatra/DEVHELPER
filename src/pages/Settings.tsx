@@ -58,7 +58,12 @@ export function Settings() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl p-6">
+    // `main` is overflow-hidden, so this page has to own its scrolling — the
+    // same shape Dashboard and ToolShell use. Without it everything below the
+    // fold is unreachable, which is what happened once Settings grew past one
+    // screen.
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl p-6">
       <h1 className="mb-6 text-2xl font-semibold">Settings</h1>
 
       <Card className="mb-4">
@@ -139,6 +144,7 @@ export function Settings() {
           <p>Local-first developer toolbox. No data leaves your machine unless you enable AI.</p>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
