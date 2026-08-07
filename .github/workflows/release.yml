@@ -32,14 +32,28 @@ jobs:
       # On a dispatch, check out the tag that was named rather than the branch
       # the workflow was launched from — otherwise a re-release builds whatever
       # main happens to be, which is not what the tag says.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      # Fail here rather than after a full release build. Without the secret
+      # the signing step dies on "Missing comment in secret key", roughly twelve
+      # minutes in, which reads as a signing bug rather than an absent secret.
+      - name: Check the signing key is available
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Add it under Settings -> Secrets and variables -> Actions. See docs/UPDATES.md."
+            exit 1
+          fi
+          echo "Signing key present (${#KEY} characters)."
 
       - uses: dtolnay/rust-toolchain@stable
 

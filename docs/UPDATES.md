@@ -98,13 +98,24 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 
 ### If the release job failed
 
-Fix the cause, then re-run against the same tag — **Actions → Release → Run
-workflow**, and type the tag (e.g. `v0.2.0`) into the `tag` input. The tag does
-not need deleting and re-pushing.
+Fix the cause, then re-run against the same tag: **Actions → Release → Run
+workflow**, leave the branch as `main`, and type the tag (e.g. `v0.2.0`) into the
+`tag` input. The tag does not need deleting and re-pushing.
 
-The input is required on purpose: on a manual run `github.ref_name` is the branch
-the run was launched from, so defaulting to it would build `main` and try to
-publish a release called "main".
+Running it from `main` is deliberate and correct. The *workflow file* comes from
+the branch you dispatch on, so you get the latest pipeline; the *source* comes
+from the `tag` input, so you build what the tag says. Fixes to the pipeline
+therefore apply to a re-release of an old tag without rewriting that tag.
+
+The `tag` input is required because on a manual run `github.ref_name` is the
+branch, so defaulting to it would build `main` and publish a release called
+"main".
+
+The job checks the signing secret before building. A missing secret fails in
+seconds with a named error rather than after a full release build — without that
+check, signing dies on `failed to decode secret key: ... Missing comment in
+secret key` about twelve minutes in, which reads as a signing bug rather than an
+absent secret.
 
 ## Building locally
 
