@@ -10,6 +10,10 @@ import {
   Bug,
   ChevronRight,
   ChevronDown,
+  Lightbulb,
+  Layers,
+  Link2,
+  Copy,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -36,6 +40,16 @@ import {
   type DebugStatus,
   type DebugEvent,
 } from "@/tools/lib/debugSession";
+import { traceInsights, type InsightSeverity } from "@/tools/lib/traceAnalysis";
+import {
+  attachToGroup,
+  dedupeEvents,
+  groupLabel,
+  groupTraces,
+  sessionOverview,
+  suggestAttachments,
+  type TraceGroup,
+} from "@/tools/lib/sessionAnalysis";
 
 const STATUS_STYLE: Record<DebugStatus, string> = {
   ok: "bg-success",
@@ -43,6 +57,17 @@ const STATUS_STYLE: Record<DebugStatus, string> = {
   warn: "bg-warning",
   info: "bg-muted-foreground/50",
   pending: "bg-muted-foreground/30",
+};
+
+const INSIGHT_STYLE: Record<InsightSeverity, string> = {
+  bad: "border-destructive/40 bg-destructive/5",
+  warn: "border-warning/40 bg-warning/5",
+  info: "border-border bg-secondary/20",
+};
+const INSIGHT_ICON: Record<InsightSeverity, string> = {
+  bad: "text-destructive",
+  warn: "text-warning",
+  info: "text-muted-foreground",
 };
 
 export function DebugSession() {
@@ -54,6 +79,8 @@ export function DebugSession() {
   const setActive = useDebugStore((s) => s.setActive);
   const importEvents = useDebugStore((s) => s.importEvents);
   const removeEvent = useDebugStore((s) => s.removeEvent);
+  const updateEvent = useDebugStore((s) => s.updateEvent);
+  const setEvents = useDebugStore((s) => s.setEvents);
   const clearEvents = useDebugStore((s) => s.clearEvents);
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
@@ -83,6 +110,39 @@ export function DebugSession() {
   }, [active, sourceFilter, errorsOnly, query, corrFilter]);
 
   const corrs = active ? correlationIds(active.events) : [];
+
+  // A session accumulates captures from several different flows; grouping turns
+  // the single list back into the flows it is made of.
+  const groups = useMemo(() => (active ? groupTraces(active.events) : []), [active]);
+  const overview = useMemo(() => sessionOverview(active?.events ?? []), [active]);
+  const attachments = useMemo(() => (active ? suggestAttachments(active.events) : []), [active]);
+  const duplicates = useMemo(() => (active ? dedupeEvents(active.events).removed : []), [active]);
+  // Insights describe what is on screen, so they follow the filters.
+  const insights = useMemo(() => traceInsights(timeline), [timeline]);
+  const [showFlows, setShowFlows] = useState(true);
+
+  /** Filter the timeline down to one flow, whichever id it is keyed by. */
+  const focusGroup = (g: TraceGroup) => {
+    setCorrFilter(g.kind === "correlation" ? g.key : "");
+    setQuery(g.kind === "correlation" ? "" : g.key);
+    setErrorsOnly(false);
+    setSourceFilter([]);
+  };
+
+  const removeDuplicates = () => {
+    if (!active || duplicates.length === 0) return;
+    setEvents(active.id, dedupeEvents(active.events).kept);
+    toast.success(`Removed ${duplicates.length} duplicate event${duplicates.length === 1 ? "" : "s"}`);
+  };
+
+  const attachAll = () => {
+    if (!active) return;
+    for (const a of attachments) {
+      const { correlationId, traceId } = attachToGroup(a.event, a.group);
+      updateEvent(active.id, a.event.id, { correlationId, traceId });
+    }
+    toast.success(`Attached ${attachments.length} capture(s) to the flow they fall inside`);
+  };
 
   const toggleExpand = (id: string) =>
     setExpanded((s) => {
@@ -174,6 +234,14 @@ export function DebugSession() {
                   className="rounded-md border border-transparent bg-transparent px-1 text-sm font-semibold hover:border-border focus:border-border focus:outline-none"
                 />
                 <Badge variant="secondary">{active.events.length} events</Badge>
+                {overview.correlatedFlows > 0 && (
+                  <Badge variant="outline" className="gap-1">
+                    <Layers className="size-3" /> {overview.correlatedFlows} flow{overview.correlatedFlows === 1 ? "" : "s"}
+                  </Badge>
+                )}
+                {overview.failedFlows > 0 && (
+                  <Badge variant="destructive">{overview.failedFlows} failed</Badge>
+                )}
                 <div className="ml-auto flex flex-wrap gap-1">
                   <Button size="sm" variant="outline" onClick={() => setShowImport((v) => !v)}><ClipboardPaste /> Import logs</Button>
                   <Button size="sm" variant="outline" onClick={() => setShowAdd((v) => !v)}><Plus /> Add event</Button>
@@ -202,6 +270,79 @@ export function DebugSession() {
                   onAdd={(ev) => { importEvents(active.id, [ev]); setShowAdd(false); }}
                   onCancel={() => setShowAdd(false)}
                 />
+              )}
+
+              {/* Housekeeping the session can do for itself */}
+              {(duplicates.length > 0 || attachments.length > 0) && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-secondary/20 p-2 text-xs">
+                  {duplicates.length > 0 && (
+                    <>
+                      <Copy className="size-3.5 text-muted-foreground" />
+                      <span>
+                        {duplicates.length} event{duplicates.length === 1 ? " is" : "s are"} indistinguishable from
+                        {duplicates.length === 1 ? " another" : " others"} — usually the same log imported twice.
+                      </span>
+                      <Button size="sm" variant="outline" className="h-7" onClick={removeDuplicates}>Remove duplicates</Button>
+                    </>
+                  )}
+                  {attachments.length > 0 && (
+                    <>
+                      <Link2 className="size-3.5 text-muted-foreground" />
+                      <span>
+                        {attachments.length} capture{attachments.length === 1 ? "" : "s"} without a correlation id fall
+                        inside exactly one flow's window.
+                      </span>
+                      <Button size="sm" variant="outline" className="h-7" onClick={attachAll}>Attach to that flow</Button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Flows in this session */}
+              {groups.length > 1 && (
+                <div className="rounded-md border border-border">
+                  <button
+                    onClick={() => setShowFlows((v) => !v)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-muted-foreground hover:bg-secondary/40"
+                  >
+                    {showFlows ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                    Flows in this session ({groups.length})
+                  </button>
+                  {showFlows && (
+                    <table className="w-full text-xs">
+                      <thead className="border-t border-border text-left text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-1 font-medium">Flow</th>
+                          <th className="px-3 py-1 font-medium">Events</th>
+                          <th className="px-3 py-1 font-medium">Span</th>
+                          <th className="px-3 py-1 font-medium">Services</th>
+                          <th className="px-3 py-1 font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {groups.map((g) => (
+                          <tr
+                            key={g.key}
+                            onClick={() => focusGroup(g)}
+                            className={cn("cursor-pointer hover:bg-secondary/40", g.errors > 0 && "bg-destructive/5")}
+                            title="Filter the timeline to this flow"
+                          >
+                            <td className="mono max-w-[240px] truncate px-3 py-1">{groupLabel(g)}</td>
+                            <td className="px-3 py-1">{g.events.length}</td>
+                            <td className="px-3 py-1 text-muted-foreground">{g.spanMs} ms</td>
+                            <td className="max-w-[220px] truncate px-3 py-1 text-muted-foreground">
+                              {g.services.join(" → ") || "—"}
+                            </td>
+                            <td className="px-3 py-1">
+                              <span className={cn("mr-1 inline-block size-2 rounded-full align-middle", STATUS_STYLE[g.status])} />
+                              {g.errors > 0 ? `${g.errors} error${g.errors === 1 ? "" : "s"}` : g.status}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               )}
 
               {/* Filters */}
@@ -252,6 +393,21 @@ export function DebugSession() {
                 <div className="relative rounded-md border border-primary/30 bg-primary/5 p-3">
                   <CopyButton value={aiOut} className="absolute right-2 top-2" />
                   <Markdown content={aiOut} className="pr-16" />
+                </div>
+              )}
+
+              {/* What the timeline on screen adds up to */}
+              {insights.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  {insights.map((ins, i) => (
+                    <div key={i} className={cn("flex gap-2 rounded-md border p-2", INSIGHT_STYLE[ins.severity])}>
+                      <Lightbulb className={cn("mt-0.5 size-3.5 shrink-0", INSIGHT_ICON[ins.severity])} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{ins.headline}</p>
+                        <p className="text-[11px] text-muted-foreground">{ins.detail}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 

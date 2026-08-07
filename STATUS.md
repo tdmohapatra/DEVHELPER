@@ -107,6 +107,32 @@ works in browser + desktop.
 
 ---
 
+## 2026-08-07 — Unified Debug Session + Trace Explorer depth
+
+The last two flagship items. Both rest on new pure-analysis libs.
+
+- [x] `traceAnalysis.ts` — attributes the span rather than only ordering it. `waterfall`
+      (proportional layout; events with no duration get a marked sliver, not a zero bar),
+      `traceGaps` (measured from when the previous step *finished*, and from the furthest
+      point reached so an overlapping child does not make its parent's tail look idle),
+      `slowestEvents`, `cascadeErrors`, `repeatedSteps` (retry loops), `ambiguousOrder`
+      (timestamps shared across services, where the order shown is not evidence), and
+      `traceInsights` over all of it. +35 tests.
+- [x] **Trace Explorer**: insight cards, a "largest unaccounted gaps" table, and a
+      waterfall / list toggle. The span now counts the last step's own duration.
+- [x] `sessionAnalysis.ts` — `groupTraces` turns a session's single list back into the
+      flows it is made of (keyed by correlation id, else trace id, else one shared
+      uncorrelated bucket), `sessionOverview`, `dedupeEvents` (fingerprint on time +
+      source + service + title, so a re-imported log collapses but two genuine retries do
+      not), and `suggestAttachments` — uncorrelated captures that fall inside **exactly
+      one** flow's window. Ambiguous ones are left alone rather than guessed at. +26 tests.
+- [x] **Debug Session**: flow table (click to filter), flow/failed counts in the header,
+      insight cards over the filtered timeline, one-click duplicate removal and one-click
+      attach-to-flow. `updateEvent`/`setEvents` added to `useDebugStore`.
+- [x] Verified: typecheck, **1247 JS tests**, `vite build` clean. No native changes.
+
+---
+
 ## 2026-08-07 — Environment Manager 2.0 (increment 2)
 
 Inheritance, transfer between machines, and connection references that actually open.

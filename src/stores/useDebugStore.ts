@@ -16,6 +16,10 @@ interface DebugState {
   addEvent: (sessionId: string, event: ParsedEvent) => void;
   importEvents: (sessionId: string, events: ParsedEvent[]) => number;
   removeEvent: (sessionId: string, eventId: string) => void;
+  /** Patch one stored event — used to attach an uncorrelated capture to a flow. */
+  updateEvent: (sessionId: string, eventId: string, patch: Partial<DebugEvent>) => void;
+  /** Replace a session's events wholesale — used by dedupe. */
+  setEvents: (sessionId: string, events: DebugEvent[]) => void;
   clearEvents: (sessionId: string) => void;
 }
 
@@ -60,6 +64,16 @@ export const useDebugStore = create<DebugState>()(
         set((s) => ({
           sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, events: x.events.filter((e) => e.id !== eventId) } : x)),
         })),
+      updateEvent: (sessionId, eventId, patch) =>
+        set((s) => ({
+          sessions: s.sessions.map((x) =>
+            x.id === sessionId
+              ? { ...x, events: x.events.map((e) => (e.id === eventId ? { ...e, ...patch } : e)) }
+              : x,
+          ),
+        })),
+      setEvents: (sessionId, events) =>
+        set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, events } : x)) })),
       clearEvents: (sessionId) =>
         set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, events: [] } : x)) })),
     }),

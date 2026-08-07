@@ -536,7 +536,10 @@ export const TOOLS: Tool[] = [
     description: "Reconstruct a distributed flow on one timeline — aggregate logs, API calls, DB & messages by correlation/trace id, then diagnose",
     category: "diagnostics",
     icon: BugIcon,
-    keywords: ["debug", "session", "timeline", "trace", "correlation", "root cause", "diagnose", "incident", "logs", "distributed"],
+    keywords: [
+      "debug", "session", "timeline", "trace", "correlation", "root cause", "diagnose", "incident", "logs",
+      "distributed", "flows", "duplicates", "cascade", "capture",
+    ],
     route: "/tools/debug-session",
     component: L(() => import("./impl/DebugSession"), "DebugSession"),
   },
@@ -546,7 +549,10 @@ export const TOOLS: Tool[] = [
     description: "Enter a correlation/trace/request id and reconstruct its path across every captured source — timeline, service flow, failure point",
     category: "diagnostics",
     icon: RouteIcon,
-    keywords: ["trace", "correlation", "request id", "explorer", "distributed", "span", "flow", "root cause", "opentelemetry", "otel"],
+    keywords: [
+      "trace", "correlation", "request id", "explorer", "distributed", "span", "flow", "root cause",
+      "opentelemetry", "otel", "waterfall", "latency", "gap", "slow", "bottleneck", "retry",
+    ],
     route: "/tools/trace-explorer",
     component: L(() => import("./impl/TraceExplorer"), "TraceExplorer"),
   },

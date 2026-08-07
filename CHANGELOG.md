@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Trace Explorer attributes the span; Debug Session sees its flows
+- **Waterfall view and gap analysis in Trace Explorer.** A chronological list says what
+  happened in what order; it does not say that four of a five-second request went into
+  one gap between two services. Gaps are measured from when the previous step *finished*,
+  so time a step reported is not counted twice and what remains is genuinely unaccounted
+  for. Insight cards call out a gap or a step that dominates the span, the first failure
+  with a count of the errors that followed it, retry loops, and timestamps shared across
+  services — where the displayed order is not evidence of causality.
+- **Debug Session groups its captures into flows.** A session accumulates whatever you
+  pressed Debug on, minutes apart, belonging to several different requests. It now shows
+  the flows it contains — events, span, services, status — and one click filters the
+  timeline to one of them.
+- **Duplicate removal and orphan attachment.** Re-importing the same log collapses instead
+  of doubling (two genuine retries still differ, so they survive). Captures with no
+  correlation id — a broker snapshot is about the broker, not the request — can be
+  attached to the flow whose window they fall inside, but only when exactly one flow was
+  in flight; guessing would put fabricated causality in front of someone debugging.
+- New `traceAnalysis.ts` and `sessionAnalysis.ts` (+61 tests). 1247 JS tests total.
+
 ### Added — Environment Manager 2.0: inheritance, transfer, and connections that open
 - **Environments can inherit.** QA and UAT usually differ in three values and agree on
   twenty; the twenty now live once in a base environment and each child overrides only
