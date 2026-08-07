@@ -25,6 +25,9 @@ import {
 } from "@/tools/lib/envResolve";
 import { exportEnvironments, mergeEnvironments, parseEnvironmentsFile, secretKeys, type MergeMode } from "@/tools/lib/envIo";
 import { handoffTarget } from "@/tools/lib/envHandoff";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { scopeItems } from "@/lib/projectScope";
+import { ProjectScope } from "@/components/ProjectScope";
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(performance.now()));
 
@@ -60,6 +63,17 @@ export function Environments() {
   const [selectedId, setSelectedId] = useState<string | null>(activeEnvId);
 
   const selected = environments.find((e) => e.id === selectedId) ?? environments[0];
+
+  // The rail, filtered to the active project when scoping is on. Compare and
+  // transfer deliberately keep every environment: comparing what a project uses
+  // against what it does not is exactly when you reach for Compare.
+  const projectProfiles = useProjectStore((s) => s.profiles);
+  const activeProjectId = useProjectStore((s) => s.activeId);
+  const scopeEnabled = useProjectStore((s) => s.scopeEnabled);
+  const scopedEnvironments = useMemo(
+    () => scopeItems(environments, (e) => e.id, "environments", projectProfiles, activeProjectId, scopeEnabled),
+    [environments, projectProfiles, activeProjectId, scopeEnabled],
+  );
 
   const add = () => {
     const name = newName.trim();
@@ -101,9 +115,10 @@ export function Environments() {
               <Button size="sm" className="w-full" onClick={add}><Plus /> Add</Button>
             </div>
 
+            <ProjectScope kind="environments" ids={environments.map((e) => e.id)} />
             <div className="flex flex-col gap-1">
               {environments.length === 0 && <p className="text-sm text-muted-foreground">No environments yet.</p>}
-              {environments.map((e) => (
+              {scopedEnvironments.map((e) => (
                 <button
                   key={e.id}
                   onClick={() => setSelectedId(e.id)}

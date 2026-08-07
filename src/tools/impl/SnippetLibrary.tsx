@@ -10,6 +10,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 import { useSnippetStore, SNIPPET_LANGUAGES, type Snippet } from "@/stores/useSnippetStore";
 import { useHandoffStore } from "@/stores/useHandoffStore";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { scopeItems } from "@/lib/projectScope";
+import { ProjectScope } from "@/components/ProjectScope";
 
 const blank = (): Snippet => ({ id: "", title: "", language: "C#", code: "", tags: [], favorite: false, updatedAt: 0 });
 
@@ -19,12 +22,17 @@ export function SnippetLibrary() {
   const [draft, setDraft] = useState<Snippet>(blank());
   const [tagsInput, setTagsInput] = useState("");
 
+  const projectProfiles = useProjectStore((s) => s.profiles);
+  const activeProjectId = useProjectStore((s) => s.activeId);
+  const scopeEnabled = useProjectStore((s) => s.scopeEnabled);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return snippets
+    const scoped = scopeItems(snippets, (s) => s.id, "snippets", projectProfiles, activeProjectId, scopeEnabled);
+    return scoped
       .filter((s) => !q || s.title.toLowerCase().includes(q) || s.code.toLowerCase().includes(q) || s.tags.some((t) => t.toLowerCase().includes(q)))
       .sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.updatedAt - a.updatedAt);
-  }, [snippets, search]);
+  }, [snippets, search, projectProfiles, activeProjectId, scopeEnabled]);
 
   const load = (s: Snippet) => { setDraft({ ...s }); setTagsInput(s.tags.join(", ")); };
   const newSnippet = () => { setDraft(blank()); setTagsInput(""); };
@@ -50,6 +58,7 @@ export function SnippetLibrary() {
     <ToolShell toolId="snippet-library" title="Snippet Library" description="Save and search reusable code snippets, locally.">
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[300px_1fr]">
         <div className="flex flex-col gap-2">
+          <ProjectScope kind="snippets" ids={snippets.map((s) => s.id)} />
           <div className="flex gap-1">
             <div className="relative flex-1">
               <Search className="absolute left-2 top-2.5 size-4 text-muted-foreground" />

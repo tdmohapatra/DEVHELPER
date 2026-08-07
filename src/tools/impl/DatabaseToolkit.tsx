@@ -39,6 +39,9 @@ import { log } from "@/lib/logBus";
 import { cn } from "@/lib/utils";
 import { useDbStore, rememberDbPasswordOnMachine, forgetDbPasswordOnMachine } from "@/stores/useDbStore";
 import { secretsAvailable } from "@/lib/secrets";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { scopeItems } from "@/lib/projectScope";
+import { ProjectScope } from "@/components/ProjectScope";
 import { useApiStore } from "@/stores/useApiStore";
 import {
   DB_ENGINES,
@@ -167,6 +170,15 @@ export function DatabaseToolkit() {
   const rememberCredential = useDbStore((s) => s.rememberCredential);
   const applyCredential = useDbStore((s) => s.applyCredential);
   const loadStoredCredential = useDbStore((s) => s.loadStoredCredential);
+
+  // The connection rail, filtered to the active project when scoping is on.
+  const projectProfiles = useProjectStore((s) => s.profiles);
+  const activeProjectId = useProjectStore((s) => s.activeId);
+  const scopeEnabled = useProjectStore((s) => s.scopeEnabled);
+  const scopedConnections = useMemo(
+    () => scopeItems(connections, (c) => c.id, "connections", projectProfiles, activeProjectId, scopeEnabled),
+    [connections, projectProfiles, activeProjectId, scopeEnabled],
+  );
   const forgetCredential = useDbStore((s) => s.forgetCredential);
   const pushHistory = useDbStore((s) => s.pushHistory);
   const history = useDbStore((s) => s.history);
@@ -736,8 +748,12 @@ export function DatabaseToolkit() {
             </div>
           )}
 
+          <ProjectScope kind="connections" ids={connections.map((c) => c.id)} />
           {connections.length === 0 && <p className="text-sm text-muted-foreground">No connections yet.</p>}
-          {connections.map((c) => {
+          {scopedConnections.length === 0 && connections.length > 0 && (
+            <p className="text-sm text-muted-foreground">No connections in this project's scope.</p>
+          )}
+          {scopedConnections.map((c) => {
             const eng = DB_ENGINES.find((e) => e.id === c.engine);
             return (
               <button
