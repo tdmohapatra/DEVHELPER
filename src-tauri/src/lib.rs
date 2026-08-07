@@ -19,6 +19,14 @@ pub fn run() {
     let toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
 
     tauri::Builder::default()
+        // Must be registered first: it intercepts the launch of a second copy
+        // before that copy sets anything else up. Raising the window we already
+        // have is what the user meant by launching it again.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
+        // Window size and position survive a restart.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -30,6 +38,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        // Registered unconditionally; without a `plugins.updater` config the
+        // check reports that no feed is set rather than silently doing nothing.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Live WebSocket connections, owned by the Rust side and addressed by id.
         .manage(ws::WsRegistry::default())
         .setup(move |app| {

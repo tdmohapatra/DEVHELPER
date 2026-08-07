@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload } from "lucide-react";
+import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import {
   storageFootprint,
   STORES,
 } from "@/lib/workspace";
+import { checkForUpdate, installUpdate, type UpdateState } from "@/lib/updates";
 
 export function Settings() {
   const theme = useAppStore((s) => s.theme);
@@ -113,14 +114,63 @@ export function Settings() {
         <CardHeader>
           <CardTitle>About</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-1 text-sm text-muted-foreground">
+        <CardContent className="space-y-2 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
             <span>DevHelper {APP_VERSION}</span>
             <Badge variant={isTauri() ? "success" : "secondary"}>{isTauri() ? "Desktop app" : "Browser dev mode"}</Badge>
           </div>
           <p>Local-first developer toolbox. No data leaves your machine unless you enable AI.</p>
+          <UpdateCheck />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** Version check. Honest about being unconfigured rather than silently idle. */
+function UpdateCheck() {
+  const [state, setState] = useState<UpdateState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [installing, setInstalling] = useState(false);
+
+  const check = async () => {
+    setBusy(true);
+    setState(await checkForUpdate(APP_VERSION));
+    setBusy(false);
+  };
+
+  const install = async () => {
+    setInstalling(true);
+    try {
+      await installUpdate();
+      toast.success("Update installed — DevHelper will restart");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" onClick={check} disabled={busy}>
+          <RefreshCw className={busy ? "animate-spin" : undefined} /> {busy ? "Checking…" : "Check for updates"}
+        </Button>
+        {state?.kind === "current" && <Badge variant="success">up to date</Badge>}
+        {state?.kind === "available" && (
+          <>
+            <Badge variant="warning">{state.version} available</Badge>
+            <Button size="sm" onClick={install} disabled={installing}>
+              {installing ? "Installing…" : "Install and restart"}
+            </Button>
+          </>
+        )}
+      </div>
+      {state?.kind === "available" && state.notes && <p className="text-xs">{state.notes}</p>}
+      {state && state.kind !== "current" && state.kind !== "available" && (
+        <p className="text-xs">{state.message}</p>
+      )}
     </div>
   );
 }

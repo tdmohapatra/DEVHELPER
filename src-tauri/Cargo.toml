@@ -18,6 +18,14 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-http = "2"
+# Remembers window size and position between launches.
+tauri-plugin-window-state = "2"
+# One DevHelper at a time: the tray icon and the global hotkey both exist to
+# raise the running window, and a second process makes both of them ambiguous.
+tauri-plugin-single-instance = "2"
+# Update checking. Inert until `plugins.updater` is configured in
+# tauri.conf.json with a release feed and public key — see docs/UPDATES.md.
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.32"
