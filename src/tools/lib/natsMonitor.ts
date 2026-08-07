@@ -399,3 +399,15 @@ export function withMonitorPort(server: string): string {
   const trimmed = server.trim().replace(/\/+$/, "");
   return /:\d+/.test(trimmed) ? trimmed.replace(/:(\d+)/, ":8222") : `${trimmed}:8222`;
 }
+
+/**
+ * The same address with its port replaced by the client default.
+ *
+ * The inverse of `withMonitorPort`, and needed for the same reason: the two
+ * ports are different listeners, so the address typed for one is never the
+ * address for the other.
+ */
+export function withClientPort(server: string): string {
+  const trimmed = server.trim().replace(/\/+$/, "") || "localhost";
+  return /:\d+/.test(trimmed) ? trimmed.replace(/:(\d+)/, ":4222") : `${trimmed}:4222`;
+}

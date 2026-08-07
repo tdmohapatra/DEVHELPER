@@ -1,7 +1,7 @@
 mod commands;
 
 use commands::{
-    db, docker, files, mssql, network, ports, process, redis, secrets, sysprobe, system, toolchain, ws,
+    db, docker, files, mssql, nats, network, ports, process, redis, secrets, sysprobe, system, toolchain, ws,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -45,6 +45,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Live WebSocket connections, owned by the Rust side and addressed by id.
         .manage(ws::WsRegistry::default())
+        // Live NATS subscriptions, owned by Rust and addressed by id.
+        .manage(nats::NatsRegistry::default())
         .setup(move |app| {
             // System tray with a quick-actions menu.
             let open = MenuItem::with_id(app, "open", "Open DevHelper", true, None::<&str>)?;
@@ -91,6 +93,12 @@ pub fn run() {
             ws::ws_ping,
             ws::ws_close,
             ws::ws_list,
+            nats::nats_connect,
+            nats::nats_publish,
+            nats::nats_request,
+            nats::nats_subscribe,
+            nats::nats_unsubscribe,
+            nats::nats_subscriptions,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { RefreshCw, Antenna, Activity, Plug, Layers, Network, AlertTriangle, Radio, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { RefreshCw, Antenna, Activity, Plug, Layers, Network, AlertTriangle, Radio, Search, Send, Square, Trash2 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,8 @@ import {
   subjectMatches,
   matchingFilters,
   portAdvice,
+  publishSubjectProblem,
+  withClientPort,
   withMonitorPort,
   type Connz,
   type Jsz,
@@ -29,14 +31,32 @@ import {
 } from "@/tools/lib/natsMonitor";
 import { brokerUnreachableEvent, natsServerEvent } from "@/tools/lib/mqCapture";
 import { useHandoffStore } from "@/stores/useHandoffStore";
+import { toast } from "@/components/ui/toast";
+import {
+  NATS_EVENT,
+  appendMessage,
+  filterFeed,
+  isStatusEvent,
+  natsPublish,
+  natsRequest,
+  natsSubscribe,
+  natsUnsubscribe,
+  subjectCounts,
+  subscribeSubjectProblem,
+  type FeedMessage,
+  type NatsAuth,
+  type NatsIncoming,
+  type NatsStatusEvent,
+} from "@/tools/lib/natsClient";
 
-type Tab = "overview" | "jetstream" | "connections" | "subjects" | "raw";
+type Tab = "overview" | "jetstream" | "connections" | "subjects" | "pubsub" | "raw";
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <Activity className="size-3.5" /> },
   { id: "jetstream", label: "JetStream", icon: <Layers className="size-3.5" /> },
   { id: "connections", label: "Connections", icon: <Plug className="size-3.5" /> },
   { id: "subjects", label: "Subjects", icon: <Radio className="size-3.5" /> },
+  { id: "pubsub", label: "Pub/Sub", icon: <Send className="size-3.5" /> },
   { id: "raw", label: "Raw", icon: <Network className="size-3.5" /> },
 ];
 
@@ -495,6 +515,8 @@ export function NatsTool() {
             </div>
           )}
 
+          {tab === "pubsub" && <PubSub server={server} />}
+
           {tab === "raw" && (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -528,6 +550,286 @@ export function NatsTool() {
         </p>
       )}
     </ToolShell>
+  );
+}
+
+/**
+ * Publish, subscribe and request over the client protocol.
+ *
+ * Everything else in this tool reads the monitoring port, which can tell you a
+ * subject exists and that nobody is subscribed to it, but not what is flowing
+ * through it. This is the half that answers "is anything actually being
+ * published", which is the question behind most "the consumer is not getting
+ * anything" reports.
+ *
+ * The address here is the client port (4222), not the monitoring port the tabs
+ * above use — so it is derived rather than shared, and shown so the difference
+ * is visible.
+ */
+function PubSub({ server }: { server: string }) {
+  const [address, setAddress] = useState(() => withClientPort(server));
+  const [auth, setAuth] = useState<NatsAuth>({});
+  const [showAuth, setShowAuth] = useState(false);
+
+  const [subject, setSubject] = useState("orders.>");
+  const [queueGroup, setQueueGroup] = useState("");
+  const [subs, setSubs] = useState<{ id: string; subject: string }[]>([]);
+
+  const [publishSubject, setPublishSubject] = useState("orders.created");
+  const [payload, setPayload] = useState('{"id":1}');
+  const [replyTo, setReplyTo] = useState("");
+
+  const [feed, setFeed] = useState<FeedMessage[]>([]);
+  const [filter, setFilter] = useState("");
+  const [paused, setPaused] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [reply, setReply] = useState<NatsIncoming | null>(null);
+
+  const seq = useRef(0);
+  // Read inside the event listener without resubscribing it on every keystroke.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let live = true;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const stop = await listen<NatsIncoming | NatsStatusEvent>(NATS_EVENT, (event) => {
+        const payload = event.payload;
+        if (isStatusEvent(payload)) {
+          if (payload.kind === "closed") setSubs((cur) => cur.filter((s) => s.id !== payload.id));
+          if (payload.kind === "error") setError(payload.detail);
+          return;
+        }
+        // Pausing stops the view updating; the subscription stays open, so
+        // nothing is missed on the server side.
+        if (pausedRef.current) return;
+        seq.current += 1;
+        setFeed((cur) => appendMessage(cur, { ...payload, at: Date.now(), seq: seq.current }));
+      });
+      if (live) unlisten = stop;
+      else stop();
+    })();
+    return () => { live = false; unlisten?.(); };
+  }, []);
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const subscribeProblem = subscribeSubjectProblem(subject);
+  const publishProblem = publishSubjectProblem(publishSubject);
+
+  const subscribe = () =>
+    run(async () => {
+      const id = await natsSubscribe(address, auth, subject.trim(), queueGroup.trim() || undefined);
+      setSubs((cur) => [...cur, { id, subject: subject.trim() }]);
+      toast.success(`Subscribed to ${subject.trim()}`);
+    });
+
+  const unsubscribe = (id: string) =>
+    run(async () => {
+      await natsUnsubscribe(id);
+      setSubs((cur) => cur.filter((s) => s.id !== id));
+    });
+
+  const publish = () =>
+    run(async () => {
+      await natsPublish(address, auth, publishSubject.trim(), payload, replyTo.trim() || undefined);
+      toast.success("Published");
+    });
+
+  const request = () =>
+    run(async () => {
+      setReply(null);
+      setReply(await natsRequest(address, auth, publishSubject.trim(), payload));
+    });
+
+  const shown = filterFeed(feed, filter);
+  const counts = subjectCounts(feed);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {!isTauri() && <NativeNotice what="Publishing and subscribing" />}
+
+      <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Client address (not the monitoring port)</span>
+          <Input className="h-8 w-56" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="localhost:4222" />
+        </label>
+        <Button size="sm" variant="outline" onClick={() => setShowAuth((v) => !v)}>
+          {showAuth ? "Hide" : "Add"} credentials
+        </Button>
+        {subs.length > 0 && <Badge variant="success">{subs.length} subscription(s)</Badge>}
+      </div>
+
+      {showAuth && (
+        <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">User</span>
+            <Input className="h-8 w-36" value={auth.user ?? ""} onChange={(e) => setAuth({ ...auth, user: e.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Password</span>
+            <Input type="password" className="h-8 w-36" value={auth.password ?? ""} onChange={(e) => setAuth({ ...auth, password: e.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Token</span>
+            <Input type="password" className="h-8 w-36" value={auth.token ?? ""} onChange={(e) => setAuth({ ...auth, token: e.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">.creds file path</span>
+            <Input className="h-8 w-56" value={auth.credsPath ?? ""} onChange={(e) => setAuth({ ...auth, credsPath: e.target.value })} />
+          </label>
+          <span className="text-[11px] text-muted-foreground">Held for this session only; nothing is saved.</span>
+        </div>
+      )}
+
+      {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
+
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <section className="flex flex-col gap-2 rounded-md border border-border p-3">
+          <SectionTitle>Subscribe</SectionTitle>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-1 flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Subject (wildcards allowed)</span>
+              <Input className="h-8 font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Queue group</span>
+              <Input className="h-8 w-32 font-mono text-xs" value={queueGroup} onChange={(e) => setQueueGroup(e.target.value)} placeholder="optional" />
+            </label>
+            <Button size="sm" onClick={subscribe} disabled={busy || !!subscribeProblem || !isTauri()}>
+              <Radio className="size-3.5" /> Subscribe
+            </Button>
+          </div>
+          {subject && subscribeProblem && <p className="text-[11px] text-warning">{subscribeProblem}</p>}
+          <p className="text-[11px] text-muted-foreground">
+            Core NATS has no replay: a subscription only sees what is published while it is open. A queue group makes
+            this one member of a load-balanced set, so it receives a share rather than everything.
+          </p>
+          {subs.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {subs.map((s) => (
+                <div key={s.id} className="flex items-center gap-2 rounded border border-border px-2 py-1 text-xs">
+                  <Radio className="size-3 text-success" />
+                  <span className="mono truncate">{s.subject}</span>
+                  <Button size="sm" variant="ghost" className="ml-auto h-6" onClick={() => unsubscribe(s.id)}>
+                    <Square className="size-3" /> Stop
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="flex flex-col gap-2 rounded-md border border-border p-3">
+          <SectionTitle>Publish or request</SectionTitle>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Subject (must be literal)</span>
+            <Input className="h-8 font-mono text-xs" value={publishSubject} onChange={(e) => setPublishSubject(e.target.value)} />
+          </label>
+          {publishSubject && publishProblem && <p className="text-[11px] text-warning">{publishProblem}</p>}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Payload</span>
+            <textarea
+              className="mono h-24 w-full rounded-md border border-input bg-transparent p-2 text-xs"
+              value={payload}
+              onChange={(e) => setPayload(e.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Reply-to subject</span>
+            <Input className="h-8 font-mono text-xs" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="optional" />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={publish} disabled={busy || !!publishProblem || !isTauri()}>
+              <Send className="size-3.5" /> Publish
+            </Button>
+            <Button size="sm" variant="outline" onClick={request} disabled={busy || !!publishProblem || !isTauri()}>
+              Request &amp; wait
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            A publish with nobody subscribed is discarded, not queued — core NATS delivers to whoever is listening at
+            that moment and nobody else. Request waits for one reply and times out after 5 seconds.
+          </p>
+          {reply && (
+            <div className="rounded-md border border-success/40 bg-success/5 p-2">
+              <div className="mb-1 flex items-center gap-2 text-xs">
+                <Badge variant="success">reply</Badge>
+                <span className="mono">{reply.subject}</span>
+                <CopyButton className="ml-auto" value={reply.payload} />
+              </div>
+              <pre className="mono max-h-40 overflow-auto text-[11px]">{reply.payload}</pre>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <SectionTitle>Live messages ({feed.length})</SectionTitle>
+          <Input className="h-8 w-56" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter subject or payload" />
+          <Button size="sm" variant={paused ? "secondary" : "ghost"} onClick={() => setPaused((p) => !p)}>
+            {paused ? "Resume" : "Pause"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setFeed([])}><Trash2 className="size-3.5" /> Clear</Button>
+          {feed.length > 0 && <CopyButton value={JSON.stringify(feed, null, 2)} label="JSON" />}
+        </div>
+        {paused && <p className="text-[11px] text-muted-foreground">Paused — the subscription is still open, so nothing is being missed on the server.</p>}
+        {counts.length > 1 && (
+          <div className="flex flex-wrap gap-1">
+            {counts.slice(0, 12).map((c) => (
+              <button
+                key={c.subject}
+                onClick={() => setFilter(c.subject)}
+                className="rounded-full bg-secondary px-2 py-0.5 text-[10px] hover:bg-primary/15 hover:text-primary"
+              >
+                {c.subject} · {c.count}
+              </button>
+            ))}
+          </div>
+        )}
+        {shown.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {feed.length === 0 ? "Nothing received yet. Subscribe to a subject to watch traffic." : "No message matches the filter."}
+          </p>
+        ) : (
+          <div className="max-h-[46vh] overflow-auto rounded-md border border-border">
+            {shown.map((m) => (
+              <div key={m.seq} className="border-b border-border px-2 py-1 last:border-b-0">
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="mono text-muted-foreground">{new Date(m.at).toLocaleTimeString()}</span>
+                  <span className="mono text-primary">{m.subject}</span>
+                  <span className="text-muted-foreground">{m.bytes} B</span>
+                  {m.reply && <Badge variant="outline" className="text-[9px]">reply→ {m.reply}</Badge>}
+                  {m.binary && <Badge variant="warning" className="text-[9px]">binary</Badge>}
+                  <CopyButton className="ml-auto" value={m.payload} />
+                </div>
+                <pre className="mono max-h-32 overflow-auto whitespace-pre-wrap text-[11px]">{m.payload}</pre>
+                {m.headers.length > 0 && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {m.headers.map(([k, v], i) => <span key={i} className="mr-2">{k}: {v}</span>)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
