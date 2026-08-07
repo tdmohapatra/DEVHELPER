@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Plug, Search, Trash2, Save, RefreshCw, Terminal, AlertTriangle, Activity, Users, Radio, Clock, KeyRound } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
   type PubSubChannel,
 } from "@/tools/lib/redisClients";
 import { brokerUnreachableEvent, redisCommandEvent, redisHealthEvent } from "@/tools/lib/mqCapture";
+import { useHandoffStore } from "@/stores/useHandoffStore";
 
 type Tab = "keys" | "health" | "clients" | "pubsub" | "slowlog" | "console";
 
@@ -85,6 +86,18 @@ export function RedisTool() {
   // Console
   const [command, setCommand] = useState("");
   const [output, setOutput] = useState<{ cmd: string; text: string; ok: boolean }[]>([]);
+
+  // Where the address came from, when the Environment Manager sent it here.
+  const [prefilledFrom, setPrefilledFrom] = useState("");
+
+  useEffect(() => {
+    const handoff = useHandoffStore.getState().take("redis");
+    if (!handoff) return;
+    if (handoff.fields.host) setHost(handoff.fields.host);
+    if (handoff.fields.port) setPort(handoff.fields.port);
+    if (handoff.fields.db) setDb(handoff.fields.db);
+    setPrefilledFrom(handoff.from);
+  }, []);
 
   /**
    * One command per call, on its own connection.
@@ -268,6 +281,7 @@ export function RedisTool() {
         <Button size="sm" onClick={connect} disabled={!isTauri() || busy}>
           {busy ? <RefreshCw className="size-3.5 animate-spin" /> : <Plug className="size-3.5" />} Connect
         </Button>
+        {prefilledFrom && <Badge variant="outline">from {prefilledFrom}</Badge>}
         {connected && (
           <>
             <Badge variant="success">connected</Badge>

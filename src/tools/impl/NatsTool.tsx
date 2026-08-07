@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { RefreshCw, Antenna, Activity, Plug, Layers, Network, AlertTriangle, Radio, Search } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import {
   type Varz,
 } from "@/tools/lib/natsMonitor";
 import { brokerUnreachableEvent, natsServerEvent } from "@/tools/lib/mqCapture";
+import { useHandoffStore } from "@/stores/useHandoffStore";
 
 type Tab = "overview" | "jetstream" | "connections" | "subjects" | "raw";
 
@@ -77,6 +78,16 @@ export function NatsTool() {
 
   const [subjectTest, setSubjectTest] = useState("orders.new.eu");
   const [filterInput, setFilterInput] = useState("orders.>\norders.*\nbilling.>");
+
+  // Where the address came from, when the Environment Manager sent it here.
+  const [prefilledFrom, setPrefilledFrom] = useState("");
+
+  useEffect(() => {
+    const handoff = useHandoffStore.getState().take("nats");
+    if (!handoff?.fields.server) return;
+    setServer(handoff.fields.server);
+    setPrefilledFrom(handoff.from);
+  }, []);
 
   /**
    * Fetch a monitoring endpoint through the Tauri HTTP plugin.
@@ -185,6 +196,7 @@ export function NatsTool() {
         <Button size="sm" onClick={refresh} disabled={busy}>
           {busy ? <RefreshCw className="size-3.5 animate-spin" /> : <Antenna className="size-3.5" />} Connect
         </Button>
+        {prefilledFrom && <Badge variant="outline">from {prefilledFrom}</Badge>}
         {loaded && varz && (
           <>
             <Badge variant="success">{varz.server_name || varz.server_id?.slice(0, 8)}</Badge>

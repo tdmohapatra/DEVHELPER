@@ -107,6 +107,35 @@ works in browser + desktop.
 
 ---
 
+## 2026-08-07 — Environment Manager 2.0 (increment 2)
+
+Inheritance, transfer between machines, and connection references that actually open.
+
+- [x] `envResolve.ts` — `Environment.extendsId` (optional, backward compatible) plus
+      cycle-safe `inheritanceChain`/`resolveVariables`/`resolvedVariables` (each value
+      labelled own / inherited / override, with what it shadows), `wouldCycle`/
+      `eligibleParents` to keep the picker honest, and `missingVariables`/
+      `unusedVariables`/`danglingReferences`. +23 tests.
+- [x] `useApiStore.activeVars()` now resolves through the chain, so every tool that
+      interpolates `{{VAR}}` gets inherited values. Deleting a parent detaches its
+      children rather than leaving them pointing at a ghost.
+- [x] **Compare now diffs resolved values**, not declared ones — an environment that
+      inherits twenty values and overrides one differs from its sibling in one place.
+      `diffVariableMaps` split out of `diffVariables` for it.
+- [x] `envIo.ts` — export/import as JSON. Secrets are an explicit choice, and a redacted
+      export keeps the *keys* so the recipient knows what to fill in. Import matches on
+      name (the same environment from two machines is one environment), offers keep-both /
+      keep-mine / use-theirs, rewrites inheritance links onto whatever ids things ended up
+      with, and reports unreadable entries instead of dropping them. +27 tests.
+- [x] `envHandoff.ts` + `useHandoffStore` — "Open in Redis / NATS / RabbitMQ" from a
+      connection reference. The port is translated, not copied: an environment records the
+      client port (4222, 5672) and these tools need the operator port (8222, 15672), so
+      handing the address over unchanged would look like the server was down. The
+      receiving tool shows "from DEV · cache". +19 tests.
+- [x] Verified: typecheck, **1186 JS tests**, `vite build` clean. No native changes.
+
+---
+
 ## 2026-08-07 — Messaging capture + RabbitMQ rebuilt
 
 Closes the last open item on the Debug Session flagship: every tool that can observe a

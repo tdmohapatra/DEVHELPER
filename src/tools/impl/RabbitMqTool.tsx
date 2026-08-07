@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Plug, RefreshCw, Send, AlertTriangle, Activity, Inbox, Shuffle, Server } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   type Severity,
 } from "@/tools/lib/rabbitMonitor";
 import { brokerUnreachableEvent, rabbitBrokerEvent, rabbitPublishEvent } from "@/tools/lib/mqCapture";
+import { useHandoffStore } from "@/stores/useHandoffStore";
 
 type Tab = "overview" | "queues" | "exchanges" | "nodes" | "publish";
 
@@ -64,6 +65,16 @@ export function RabbitMqTool() {
   const [pubKey, setPubKey] = useState("");
   const [pubBody, setPubBody] = useState('{"hello":"world"}');
   const [pubResult, setPubResult] = useState<{ routed: boolean; text: string } | null>(null);
+
+  // Where the address came from, when the Environment Manager sent it here.
+  const [prefilledFrom, setPrefilledFrom] = useState("");
+
+  useEffect(() => {
+    const handoff = useHandoffStore.getState().take("rabbitmq");
+    if (!handoff?.fields.server) return;
+    setServer(handoff.fields.server);
+    setPrefilledFrom(handoff.from);
+  }, []);
 
   const auth = () => `Basic ${btoa(`${user}:${pass}`)}`;
 
@@ -199,6 +210,7 @@ export function RabbitMqTool() {
         <Button size="sm" onClick={refresh} disabled={busy}>
           {busy ? <RefreshCw className="size-3.5 animate-spin" /> : <Plug className="size-3.5" />} Connect
         </Button>
+        {prefilledFrom && <Badge variant="outline">from {prefilledFrom}</Badge>}
         {loaded && overview && (
           <>
             <Badge variant="success">{overview.cluster_name || "connected"}</Badge>

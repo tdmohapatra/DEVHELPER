@@ -38,8 +38,17 @@ function varsMap(env: Environment): Record<string, string> {
 
 /** Diff the variables of two environments: added (in B), removed (in A), changed, same. */
 export function diffVariables(a: Environment, b: Environment): VarDiff[] {
-  const ma = varsMap(a);
-  const mb = varsMap(b);
+  return diffVariableMaps(varsMap(a), varsMap(b));
+}
+
+/**
+ * Diff two already-resolved variable maps.
+ *
+ * Separate from `diffVariables` because once environments can inherit, the
+ * comparison worth seeing is between what each one *resolves to*, not between
+ * the handful of values each happens to declare itself.
+ */
+export function diffVariableMaps(ma: Record<string, string>, mb: Record<string, string>): VarDiff[] {
   const keys = [...new Set([...Object.keys(ma), ...Object.keys(mb)])].sort();
   return keys.map((key) => {
     const inA = key in ma;

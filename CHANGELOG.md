@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Environment Manager 2.0: inheritance, transfer, and connections that open
+- **Environments can inherit.** QA and UAT usually differ in three values and agree on
+  twenty; the twenty now live once in a base environment and each child overrides only
+  what differs. Every tool that interpolates `{{VAR}}` sees the resolved set. The editor
+  shows each value with where it came from — own, inherited, or overriding — because an
+  environment that inherits twenty values otherwise looks empty.
+- **Compare diffs resolved values**, so a difference is something someone chose rather
+  than something someone forgot to copy.
+- **Import / export environments as JSON.** Secrets are an explicit decision, and a
+  redacted export keeps the keys so the recipient knows what has to be filled in. Import
+  matches on name — the same environment exported from two machines is one environment —
+  and offers keep-both / keep-mine / use-theirs.
+- **"Open in Redis / NATS / RabbitMQ"** from a connection reference, alongside the
+  existing "Open in DB Toolkit". The port is translated rather than copied: environments
+  record the client port (4222, 5672) and these tools need the operator port (8222,
+  15672), so handing the address over unchanged looks like the server is down.
+- New `envResolve.ts`, `envIo.ts`, `envHandoff.ts` and `useHandoffStore` (+69 tests).
+  1186 JS tests total.
+
 ### Added — Messaging tools feed the Debug Session; RabbitMQ rebuilt
 - **Capture from Redis, NATS and RabbitMQ** — the last tools that could not put anything
   on the Debug Session timeline now can. A broker snapshot's status is the worst thing in

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ApiRequest, ApiFolder, Environment, KeyValue } from "@/tools/lib/apiTypes";
+import type { ApiRequest, ApiFolder, Environment } from "@/tools/lib/apiTypes";
+import { resolveVariables } from "@/tools/lib/envResolve";
 
 export interface HistoryEntry {
   id: string;
@@ -32,6 +33,8 @@ interface ApiState {
   addEnvironment: (name: string, isProduction: boolean) => string;
   updateEnvironment: (env: Environment) => void;
   deleteEnvironment: (id: string) => void;
+  /** Replace the whole set — used by import, which decides the merge itself. */
+  setEnvironments: (envs: Environment[]) => void;
   setActiveEnv: (id: string | null) => void;
 
   pushHistory: (e: Omit<HistoryEntry, "id" | "at">) => void;
@@ -85,8 +88,17 @@ export const useApiStore = create<ApiState>()(
       updateEnvironment: (env) => set((s) => ({ environments: s.environments.map((e) => (e.id === env.id ? env : e)) })),
       deleteEnvironment: (id) =>
         set((s) => ({
-          environments: s.environments.filter((e) => e.id !== id),
+          // Children of a deleted parent are detached rather than left pointing
+          // at a ghost, so what they resolve to is what the editor shows.
+          environments: s.environments
+            .filter((e) => e.id !== id)
+            .map((e) => (e.extendsId === id ? { ...e, extendsId: undefined } : e)),
           activeEnvId: s.activeEnvId === id ? null : s.activeEnvId,
+        })),
+      setEnvironments: (envs) =>
+        set((s) => ({
+          environments: envs,
+          activeEnvId: envs.some((e) => e.id === s.activeEnvId) ? s.activeEnvId : (envs[0]?.id ?? null),
         })),
       setActiveEnv: (id) => set({ activeEnvId: id }),
 
@@ -96,12 +108,12 @@ export const useApiStore = create<ApiState>()(
         })),
 
       activeEnv: () => get().environments.find((e) => e.id === get().activeEnvId),
+      // Resolved through the inheritance chain, so a child that only overrides
+      // one value still sends everything its base defines.
       activeVars: () => {
-        const env = get().environments.find((e) => e.id === get().activeEnvId);
-        if (!env) return {};
-        const vars: Record<string, string> = {};
-        env.variables.forEach((v: KeyValue) => v.enabled && v.key && (vars[v.key] = v.value));
-        return vars;
+        const { environments, activeEnvId } = get();
+        const env = environments.find((e) => e.id === activeEnvId);
+        return env ? resolveVariables(env, environments) : {};
       },
     }),
     { name: "devhelper-api" },

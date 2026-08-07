@@ -108,6 +108,13 @@ export interface Environment {
   variables: KeyValue[];
   /** Optional typed connection references (Environment Manager 2.0). Backward compatible. */
   connections?: EnvConnection[];
+  /**
+   * Id of the environment this one inherits variables from, if any.
+   *
+   * A child's own variables win; everything else falls through to the parent.
+   * Optional, so environments saved before inheritance existed still load.
+   */
+  extendsId?: string;
 }
 
 export function emptyRequest(id: string): ApiRequest {
