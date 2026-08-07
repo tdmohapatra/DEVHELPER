@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Search, Star, History, CornerDownLeft, LayoutDashboard, Settings as SettingsIcon, Moon, Sun, Hash, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, Star, History, CornerDownLeft, LayoutDashboard, Settings as SettingsIcon, Moon, Sun, Hash, ArrowUp, ArrowDown, Send, Server, Database, Bookmark, Bug, FolderKanban } from "lucide-react";
 import { TOOLS } from "@/tools/registry";
 import { CATEGORY_COLORS } from "@/tools/categoryColors";
 import { useAppStore } from "@/stores/useAppStore";
+import { useApiStore } from "@/stores/useApiStore";
+import { useDbStore } from "@/stores/useDbStore";
+import { useDebugStore } from "@/stores/useDebugStore";
+import { useSnippetStore } from "@/stores/useSnippetStore";
+import { useProjectStore } from "@/stores/useProjectStore";
+import { sendHandoff } from "@/stores/useHandoffStore";
 import { generateGuids } from "@/tools/lib/guid";
 import { scoreTool, fuzzyMatch } from "@/lib/fuzzy";
+import { buildArtifactIndex, searchArtifacts, KIND_LABEL, type ArtifactKind } from "@/lib/artifactIndex";
 import { copyToClipboard } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
@@ -17,12 +24,52 @@ interface Command {
   icon: ComponentType<{ className?: string }>;
   category?: CategoryId;
   shortcut?: string;
-  group: "Action" | "Tool";
+  group: "Action" | "Tool" | "Yours";
+  /** For a saved-artefact row: what kind it is, shown instead of a category. */
+  kindLabel?: string;
   isFavorite?: boolean;
   isRecent?: boolean;
   score: number;
   positions: number[];
   run: () => void;
+}
+
+const ARTIFACT_ICON: Record<ArtifactKind, ComponentType<{ className?: string }>> = {
+  request: Send,
+  environment: Server,
+  connection: Database,
+  snippet: Bookmark,
+  session: Bug,
+  project: FolderKanban,
+};
+
+/**
+ * Open a saved artefact in the tool that owns it.
+ *
+ * Where a store has a notion of "active", selecting it is the whole job. The
+ * two that do not — a request and a snippet are picked from a list inside their
+ * tool — get a one-shot handoff, which those tools read on mount.
+ */
+function openArtifact(kind: ArtifactKind, refId: string, toolId: string): void {
+  switch (kind) {
+    case "environment":
+      useApiStore.getState().setActiveEnv(refId);
+      break;
+    case "connection":
+      useDbStore.getState().setActive(refId);
+      break;
+    case "session":
+      useDebugStore.getState().setActive(refId);
+      break;
+    case "project":
+      useProjectStore.getState().setActive(refId);
+      break;
+    case "request":
+    case "snippet":
+      sendHandoff(toolId, { selectId: refId }, "the command palette");
+      break;
+  }
+  useAppStore.getState().openTool(toolId);
 }
 
 /** Render a label with fuzzy-matched characters emphasized. */
@@ -45,6 +92,28 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const theme = useAppStore((s) => s.theme);
   const favorites = useAppStore((s) => s.favorites);
   const recent = useAppStore((s) => s.recent);
+
+  // Your own saved work, so the palette finds the request you named rather than
+  // only the tool you would have had to remember it was in.
+  const requests = useApiStore((s) => s.requests);
+  const environments = useApiStore((s) => s.environments);
+  const connections = useDbStore((s) => s.connections);
+  const sessions = useDebugStore((s) => s.sessions);
+  const snippets = useSnippetStore((s) => s.snippets);
+  const projects = useProjectStore((s) => s.profiles);
+
+  const artifacts = useMemo(
+    () =>
+      buildArtifactIndex({
+        requests: Object.values(requests),
+        environments,
+        connections,
+        snippets,
+        sessions,
+        projects,
+      }),
+    [requests, environments, connections, snippets, sessions, projects],
+  );
 
   useEffect(() => {
     if (open) {
@@ -94,14 +163,30 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       return { id: t.id, name: t.name, description: t.description, icon: t.icon, category: t.category, shortcut: t.shortcut, group: "Tool" as const, isFavorite: fav, isRecent: rec >= 0, score, positions: r.positions, run: () => { openTool(t.id); onClose(); } };
     }).filter((c): c is Command => c !== null);
 
+    // Saved artefacts. Only searched, never listed on an empty query — the
+    // palette should open on the tools, not on a dump of everything you own.
+    const yours: Command[] = searchArtifacts(artifacts, q).map((a) => ({
+      id: a.id,
+      name: a.name,
+      description: a.detail,
+      icon: ARTIFACT_ICON[a.kind],
+      group: "Yours" as const,
+      kindLabel: KIND_LABEL[a.kind],
+      // Ranked above tools: an exact name you chose beats a fuzzy tool match.
+      score: a.score + 6,
+      positions: a.positions,
+      run: () => { openArtifact(a.kind, a.refId, a.toolId); onClose(); },
+    }));
+
     const sortByScore = (a: Command, b: Command) => b.score - a.score || a.name.localeCompare(b.name);
     actions.sort(sortByScore);
     tools.sort(sortByScore);
+    yours.sort(sortByScore);
 
     // Empty query surfaces a compact, useful set; a real query shows everything ranked.
     const limitedTools = q ? tools : tools.slice(0, 8);
-    return q ? [...actions, ...tools] : [...limitedTools, ...actions];
-  }, [query, favorites, recent, theme, openTool, openView, toggleTheme, onClose]);
+    return q ? [...yours, ...actions, ...tools] : [...limitedTools, ...actions];
+  }, [query, favorites, recent, theme, artifacts, openTool, openView, toggleTheme, onClose]);
 
   useEffect(() => setActive(0), [query]);
 
@@ -134,9 +219,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tools and actions…"
+            placeholder="Search tools, actions, and your saved work…"
             className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            aria-label="Search tools and actions"
+            aria-label="Search tools, actions, and saved work"
           />
           <kbd className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">Esc</kbd>
         </div>
@@ -163,6 +248,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                     <div className="flex items-center gap-1.5 text-sm">
                       <span className="truncate">{highlight(c.name, c.positions)}</span>
                       {c.group === "Action" && <span className="rounded bg-secondary px-1 text-[9px] uppercase tracking-wide text-muted-foreground">cmd</span>}
+                      {c.kindLabel && <span className="shrink-0 rounded bg-primary/10 px-1 text-[9px] uppercase tracking-wide text-primary">{c.kindLabel}</span>}
                       {c.isFavorite && <Star className="size-3 shrink-0 fill-warning text-warning" />}
                       {c.isRecent && !c.isFavorite && <History className="size-3 shrink-0 text-muted-foreground" />}
                     </div>

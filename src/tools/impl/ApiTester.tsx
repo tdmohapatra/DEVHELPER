@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, Save, X, Plus, FolderPlus, Ban, AlertTriangle, ChevronRight, Terminal, Upload, Download, Check, PlayCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useApiStore } from "@/stores/useApiStore";
+import { useHandoffStore } from "@/stores/useHandoffStore";
 import {
   HTTP_METHODS,
   emptyRequest,
@@ -344,6 +345,17 @@ export function ApiTester() {
   };
 
   const newRequest = () => loadRequest(emptyRequest(uid()));
+
+  // Opened straight onto one saved request from the command palette.
+  useEffect(() => {
+    const handoff = useHandoffStore.getState().take("api-tester");
+    const wanted = handoff?.fields.selectId;
+    if (!wanted) return;
+    const found = useApiStore.getState().requests[wanted];
+    if (found) loadRequest(found);
+    // loadRequest only touches setState functions, which are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Formatted body, for the Copy button in the response header. */
   const prettyBody = useMemo(() => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Star, Trash2, Search, Save } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 import { useSnippetStore, SNIPPET_LANGUAGES, type Snippet } from "@/stores/useSnippetStore";
+import { useHandoffStore } from "@/stores/useHandoffStore";
 
 const blank = (): Snippet => ({ id: "", title: "", language: "C#", code: "", tags: [], favorite: false, updatedAt: 0 });
 
@@ -27,6 +28,15 @@ export function SnippetLibrary() {
 
   const load = (s: Snippet) => { setDraft({ ...s }); setTagsInput(s.tags.join(", ")); };
   const newSnippet = () => { setDraft(blank()); setTagsInput(""); };
+
+  // Opened straight onto one snippet from the command palette.
+  useEffect(() => {
+    const handoff = useHandoffStore.getState().take("snippet-library");
+    const wanted = handoff?.fields.selectId;
+    if (!wanted) return;
+    const found = useSnippetStore.getState().snippets.find((s) => s.id === wanted);
+    if (found) load(found);
+  }, []);
 
   const save = () => {
     if (!draft.title.trim()) return toast.error("Title required");
