@@ -107,6 +107,52 @@ works in browser + desktop.
 
 ---
 
+## 2026-08-07 — Cross-cutting audit: durability, discovery, desktop, protocols
+
+Driven by an audit of the whole app rather than one tool. The tool-level quality was
+high; the gaps were all cross-cutting.
+
+- [x] **Workspace backup** (`lib/workspace.ts`, +34 tests) — every store was in the
+      webview's local storage with no way out. One versioned export/restore covering all
+      nine, working at the storage layer so a new store cannot silently be left out (a
+      test asserts the list matches what the app writes). Also fixed `Clear local data`,
+      which removed one of nine keys and claimed to have cleared everything.
+- [x] **Palette finds your own work** (`lib/artifactIndex.ts`, +23 tests) — requests,
+      environments, connections, snippets, debug sessions and projects are searchable and
+      openable from `Ctrl+K`. Costs ~8 kB gzip on the startup bundle, since the palette
+      now imports every store.
+- [x] **Desktop hygiene** — window state persisted, single-instance (registered first, so
+      a second launch raises the running window), and the updater plugin compiled in.
+      The updater is inert until a release feed and public key are configured; the check
+      says so rather than claiming to be up to date. See `docs/UPDATES.md`.
+- [x] **OS credential storage** (`commands/secrets.rs`, `lib/secrets.ts`) — opt-in, keyed
+      by server account, via Windows Credential Manager. DevHelper still writes no
+      password of its own. The AI API key moved out of local storage, where a workspace
+      backup would have carried it. Round-trip is runtime-verified against the real
+      credential store (4 Rust tests).
+- [x] **Project scoping** (`lib/projectScope.ts`, +24 tests) — profiles can claim
+      environments, connections, snippets and folders; three tools filter to the active
+      one. Claims are non-exclusive and anything unclaimed stays visible everywhere.
+- [x] **Rebindable shortcuts** (`lib/keybindings.ts`, +34 tests) — one binding table,
+      conflict detection instead of iteration-order luck, matching on `event.code` so a
+      binding does not move with the keyboard layout.
+- [x] **Component tests** — jsdom needed a localStorage polyfill (zustand threw on import)
+      and `scrollIntoView`. Covers the palette, project scoping, capture and one whole
+      tool screen. First tests in this repo that render a screen.
+- [x] **NATS client protocol** (`commands/nats.rs`, `natsClient.ts`, +21 tests) — publish,
+      request-reply and live subscriptions on port 4222 via `async-nats`. Connections
+      pooled per address; feed capped at 500; pause freezes the view, not the subscription.
+- [x] **Redis held connection** (`redis_watch`, `redisWatch.ts`, +20 tests, +6 Rust) —
+      SUBSCRIBE / PSUBSCRIBE / MONITOR, which a command-per-call client cannot do.
+      MONITOR carries an explicit cost warning.
+- [x] **RabbitMQ message peek** — the management API's `get`, requeueing by default;
+      removing permanently needs a second confirmation. No AMQP client added: inspection
+      should not require draining the queue.
+- [x] Verified: typecheck, **1452 JS tests** (from 1247), **49 Rust tests** (from 31),
+      `vite build` and `tauri:build` clean.
+
+---
+
 ## 2026-08-07 — Unified Debug Session + Trace Explorer depth
 
 The last two flagship items. Both rest on new pure-analysis libs.

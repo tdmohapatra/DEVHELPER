@@ -321,6 +321,79 @@ export function routingKeyProblem(key: string, exchangeType: string): string | n
   return null;
 }
 
+export interface PeekedMessage {
+  payload?: string;
+  payload_bytes?: number;
+  payload_encoding?: string;
+  routing_key?: string;
+  redelivered?: boolean;
+  exchange?: string;
+  message_count?: number;
+  properties?: {
+    headers?: Record<string, unknown>;
+    content_type?: string;
+    correlation_id?: string;
+    message_id?: string;
+    timestamp?: number;
+    delivery_mode?: number;
+    priority?: number;
+    reply_to?: string;
+    expiration?: string;
+  };
+}
+
+/**
+ * How a peek should treat the messages it reads.
+ *
+ * `reject_requeue_true` puts them back, which is what inspection means and the
+ * only mode this tool offers by default. The others exist in the API and are
+ * destructive: `ack_requeue_false` removes the message permanently.
+ */
+export type PeekMode = "reject_requeue_true" | "ack_requeue_false";
+
+/** Request body for the management API's queue `get`. */
+export function peekBody(count: number, mode: PeekMode): string {
+  return JSON.stringify({
+    count: Math.max(1, Math.min(count, 50)),
+    ackmode: mode,
+    encoding: "auto",
+    // Long payloads are truncated server-side rather than pulled in whole.
+    truncate: 50000,
+  });
+}
+
+/**
+ * What a peek does to the queue, in words.
+ *
+ * Worth stating on screen every time: the difference between the two modes is
+ * whether the messages still exist afterwards, and the API's own naming does
+ * not make that obvious.
+ */
+export function peekWarning(mode: PeekMode): string {
+  return mode === "reject_requeue_true"
+    ? "Messages are put back. They briefly leave the queue and return marked as redelivered, and their position is not guaranteed."
+    : "Messages are removed permanently. There is no undo, and nothing else will ever receive them.";
+}
+
+/**
+ * Decode a peeked payload.
+ *
+ * The API returns base64 when the body is not valid UTF-8, and says which via
+ * `payload_encoding`. Rendering base64 as though it were text is how a protobuf
+ * body ends up looking like corruption.
+ */
+export function decodePayload(message: PeekedMessage): { text: string; binary: boolean } {
+  const raw = message.payload ?? "";
+  if (message.payload_encoding !== "base64") return { text: raw, binary: false };
+  try {
+    const decoded = atob(raw);
+    // Still shown as binary: it decoded, but it was not sent as text.
+    return { text: decoded, binary: true };
+  } catch {
+    return { text: `<${message.payload_bytes ?? 0} bytes, base64>`, binary: true };
+  }
+}
+
 /** Queues ordered by how much attention they need: depth first, then unacked. */
 export function sortQueuesByAttention(queues: Queue[]): Queue[] {
   return [...queues].sort((a, b) => {

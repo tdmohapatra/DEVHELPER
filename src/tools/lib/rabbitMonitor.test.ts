@@ -7,6 +7,9 @@ import {
   looksLikeDeadLetter,
   mgmtPortAdvice,
   mgmtUrl,
+  decodePayload,
+  peekBody,
+  peekWarning,
   routingKeyProblem,
   sortQueuesByAttention,
   withMgmtPort,
@@ -243,6 +246,56 @@ describe("routingKeyProblem", () => {
 
   it("accepts an ordinary key", () => {
     expect(routingKeyProblem("orders.created", "direct")).toBeNull();
+  });
+});
+
+describe("peekBody", () => {
+  it("asks for the requested count and mode", () => {
+    const body = JSON.parse(peekBody(5, "reject_requeue_true"));
+    expect(body).toMatchObject({ count: 5, ackmode: "reject_requeue_true", encoding: "auto" });
+  });
+
+  it("clamps the count, so a typo cannot pull a whole queue into the UI", () => {
+    expect(JSON.parse(peekBody(9999, "reject_requeue_true")).count).toBe(50);
+    expect(JSON.parse(peekBody(0, "reject_requeue_true")).count).toBe(1);
+  });
+
+  it("truncates long payloads server-side", () => {
+    expect(JSON.parse(peekBody(1, "reject_requeue_true")).truncate).toBe(50000);
+  });
+});
+
+describe("peekWarning", () => {
+  it("says requeueing puts messages back, and warns about redelivery", () => {
+    expect(peekWarning("reject_requeue_true")).toMatch(/put back/);
+    expect(peekWarning("reject_requeue_true")).toMatch(/redelivered/);
+  });
+
+  it("says the other mode is permanent, in those words", () => {
+    expect(peekWarning("ack_requeue_false")).toMatch(/removed permanently/);
+    expect(peekWarning("ack_requeue_false")).toMatch(/no undo/i);
+  });
+});
+
+describe("decodePayload", () => {
+  it("passes text through untouched", () => {
+    expect(decodePayload({ payload: '{"a":1}', payload_encoding: "string" })).toEqual({ text: '{"a":1}', binary: false });
+  });
+
+  it("decodes base64 but still flags it as not sent as text", () => {
+    // Rendering base64 as text is how a protobuf body looks like corruption.
+    const encoded = btoa("hello");
+    expect(decodePayload({ payload: encoded, payload_encoding: "base64" })).toEqual({ text: "hello", binary: true });
+  });
+
+  it("describes a payload it cannot decode rather than showing nothing", () => {
+    const out = decodePayload({ payload: "!!!not base64!!!", payload_encoding: "base64", payload_bytes: 12 });
+    expect(out.binary).toBe(true);
+    expect(out.text).toMatch(/12 bytes/);
+  });
+
+  it("copes with a message that has no payload", () => {
+    expect(decodePayload({})).toEqual({ text: "", binary: false });
   });
 });
 

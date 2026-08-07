@@ -5,6 +5,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Post-v1 evolution, 2026-07-25
 
+### Added — Workspace backup, palette search, credentials, shortcuts, live protocols
+- **Back up and restore everything.** All saved work lived in the webview's local storage
+  with no way out — not a file any backup tool sees. One versioned document now covers
+  every store, with secrets an explicit choice. `Clear local data` also actually clears it
+  now; it used to remove one key of nine and report success.
+- **`Ctrl+K` finds your own work**, not just tool names: requests, environments,
+  connections, snippets, debug sessions and projects, each opening in the tool that owns
+  it.
+- **Passwords can be remembered by the OS.** Opt-in, per server account, in the Windows
+  Credential Manager — DevHelper still writes no password of its own. The AI API key has
+  moved out of local storage, where it sat in plain text and a backup would have copied it.
+- **Project profiles now scope the app.** A profile can claim environments, connections
+  and snippets; the Database Toolkit, Environment Manager and Snippet Library can filter
+  to the active one. Anything unclaimed stays visible everywhere.
+- **Keyboard shortcuts are rebindable**, with conflicts reported rather than decided by
+  iteration order, and matching on the physical key so bindings survive a layout change.
+- **Window position, single instance, and an update check.** The updater is inert until a
+  release feed is configured and says so plainly (`docs/UPDATES.md`).
+- **NATS speaks its client protocol**: publish, request-reply and live subscriptions on
+  4222, not only the read-only monitoring port.
+- **Redis holds a connection open** for SUBSCRIBE, PSUBSCRIBE and MONITOR.
+- **RabbitMQ can show what is in a queue**, requeueing by default; removing messages
+  permanently takes a second confirmation.
+- First tests that render a screen — the suite had been almost entirely pure logic.
+  1452 JS tests, 49 Rust tests.
+
 ### Added — Trace Explorer attributes the span; Debug Session sees its flows
 - **Waterfall view and gap analysis in Trace Explorer.** A chronological list says what
   happened in what order; it does not say that four of a five-second request went into

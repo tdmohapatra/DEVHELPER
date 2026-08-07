@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Plug, RefreshCw, Send, AlertTriangle, Activity, Inbox, Shuffle, Server } from "lucide-react";
+import { Plug, RefreshCw, Send, AlertTriangle, Activity, Inbox, Shuffle, Server, Eye } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,9 @@ import { cn } from "@/lib/utils";
 import {
   brokerFindings,
   deadLetterExchange,
+  decodePayload,
+  peekBody,
+  peekWarning,
   formatBytes,
   limitUsage,
   mgmtPortAdvice,
@@ -22,6 +25,8 @@ import {
   type Exchange,
   type Node,
   type Overview,
+  type PeekMode,
+  type PeekedMessage,
   type Queue,
   type Severity,
 } from "@/tools/lib/rabbitMonitor";
@@ -65,6 +70,7 @@ export function RabbitMqTool() {
   const [pubKey, setPubKey] = useState("");
   const [pubBody, setPubBody] = useState('{"hello":"world"}');
   const [pubResult, setPubResult] = useState<{ routed: boolean; text: string } | null>(null);
+  const [peeking, setPeeking] = useState<Queue | null>(null);
 
   // Where the address came from, when the Environment Manager sent it here.
   const [prefilledFrom, setPrefilledFrom] = useState("");
@@ -324,21 +330,51 @@ export function RabbitMqTool() {
               {sortedQueues.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No queues exist.</p>
               ) : (
-                <Table
-                  columns={["Queue", "Vhost", "State", "Total", "Ready", "Unacked", "Consumers", "Memory", "DLX", "Durable", "Node"]}
-                  rows={sortedQueues.map((q) => [
-                    q.name ?? "—",
-                    q.vhost ?? "/",
-                    q.state ?? "—",
-                    (q.messages ?? 0).toLocaleString(),
-                    (q.messages_ready ?? 0).toLocaleString(),
-                    (q.messages_unacknowledged ?? 0).toLocaleString(),
-                    String(q.consumers ?? 0),
-                    formatBytes(q.memory),
-                    deadLetterExchange(q) ?? "none",
-                    q.durable ? "yes" : "no",
-                    q.node ?? "—",
-                  ])}
+                <div className="max-h-[40vh] overflow-auto rounded-md border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 border-b border-border bg-card text-left text-muted-foreground">
+                      <tr>
+                        {["Queue", "Vhost", "State", "Total", "Ready", "Unacked", "Consumers", "DLX", ""].map((c) => (
+                          <th key={c} className="whitespace-nowrap px-2 py-1 font-medium">{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {sortedQueues.map((q) => (
+                        <tr key={`${q.vhost}/${q.name}`} className="hover:bg-secondary/40">
+                          <td className="mono max-w-[220px] truncate px-2 py-1" title={q.name}>{q.name ?? "—"}</td>
+                          <td className="mono px-2 py-1">{q.vhost ?? "/"}</td>
+                          <td className="mono px-2 py-1">{q.state ?? "—"}</td>
+                          <td className="mono px-2 py-1">{(q.messages ?? 0).toLocaleString()}</td>
+                          <td className="mono px-2 py-1">{(q.messages_ready ?? 0).toLocaleString()}</td>
+                          <td className="mono px-2 py-1">{(q.messages_unacknowledged ?? 0).toLocaleString()}</td>
+                          <td className="mono px-2 py-1">{q.consumers ?? 0}</td>
+                          <td className="mono px-2 py-1">{deadLetterExchange(q) ?? "none"}</td>
+                          <td className="px-2 py-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6"
+                              disabled={(q.messages ?? 0) === 0}
+                              onClick={() => setPeeking(q)}
+                            >
+                              <Eye className="size-3" /> Peek
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {peeking && (
+                <PeekPanel
+                  queue={peeking}
+                  server={server}
+                  auth={auth()}
+                  onClose={() => setPeeking(null)}
+                  onChanged={refresh}
                 />
               )}
             </div>
@@ -468,6 +504,144 @@ export function RabbitMqTool() {
         </p>
       )}
     </ToolShell>
+  );
+}
+
+/**
+ * Look at what is actually in a queue.
+ *
+ * This is the management API's `get`, not an AMQP consumer — deliberately. The
+ * question a developer has is "what is sitting in there", and the answer should
+ * not require draining the queue to find out. Requeueing is the default and the
+ * only mode reachable without a second, explicit confirmation.
+ *
+ * Even requeueing is not free: the messages leave the queue and come back
+ * flagged as redelivered, and their position is not guaranteed. Said plainly on
+ * screen rather than buried, because on a queue with ordering expectations that
+ * matters.
+ */
+function PeekPanel({
+  queue,
+  server,
+  auth,
+  onClose,
+  onChanged,
+}: {
+  queue: Queue;
+  server: string;
+  auth: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [count, setCount] = useState(5);
+  const [mode, setMode] = useState<PeekMode>("reject_requeue_true");
+  const [messages, setMessages] = useState<PeekedMessage[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const name = queue.name ?? "";
+  const vhost = queue.vhost ?? "/";
+
+  const peek = async () => {
+    if (mode === "ack_requeue_false") {
+      const ok = confirm(
+        `Permanently remove up to ${count} message(s) from "${name}"? They cannot be recovered and nothing else will receive them.`,
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const res = await executeRequest({
+        method: "POST",
+        url: mgmtUrl(server, `/queues/${encodeURIComponent(vhost)}/${encodeURIComponent(name)}/get`),
+        headers: { Authorization: auth, "Content-Type": "application/json" },
+        body: peekBody(count, mode),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      setMessages(JSON.parse(res.body) as PeekedMessage[]);
+      if (mode === "ack_requeue_false") onChanged();
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <span className="text-xs font-medium">
+          Peek <span className="mono">{name}</span>
+        </span>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Messages</span>
+          <Input
+            type="number"
+            min={1}
+            max={50}
+            className="h-8 w-20"
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value) || 1)}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Afterwards</span>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as PeekMode)}
+            className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+          >
+            <option value="reject_requeue_true">Put them back</option>
+            <option value="ack_requeue_false">Remove them permanently</option>
+          </select>
+        </label>
+        <Button size="sm" onClick={peek} disabled={busy}><Eye className="size-3.5" /> Peek</Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+      </div>
+
+      <p className={cn("text-[11px]", mode === "ack_requeue_false" ? "text-destructive" : "text-muted-foreground")}>
+        {mode === "ack_requeue_false" && <AlertTriangle className="mr-1 inline size-3" />}
+        {peekWarning(mode)}
+      </p>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      {messages && (messages.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          The queue reported {(queue.messages ?? 0).toLocaleString()} message(s) but returned none — they are all
+          unacknowledged with a consumer, so nothing else can have them until that channel acks or dies.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {messages.map((m, i) => {
+            const { text, binary } = decodePayload(m);
+            return (
+              <div key={i} className="rounded-md border border-border">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1 text-[11px]">
+                  <Badge variant="outline" className="text-[9px]">{m.routing_key || "(no key)"}</Badge>
+                  <span className="text-muted-foreground">{m.payload_bytes ?? 0} B</span>
+                  {m.redelivered && <Badge variant="warning" className="text-[9px]">redelivered</Badge>}
+                  {binary && <Badge variant="secondary" className="text-[9px]">binary</Badge>}
+                  {m.properties?.correlation_id && (
+                    <span className="mono text-muted-foreground">corr={m.properties.correlation_id}</span>
+                  )}
+                  <CopyButton className="ml-auto" value={text} />
+                </div>
+                <pre className="mono max-h-48 overflow-auto whitespace-pre-wrap p-2 text-[11px]">{text}</pre>
+                {m.properties?.headers && Object.keys(m.properties.headers).length > 0 && (
+                  <div className="border-t border-border px-2 py-1 text-[10px] text-muted-foreground">
+                    {Object.entries(m.properties.headers).map(([k, v]) => (
+                      <span key={k} className="mr-2">{k}: {String(v)}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
