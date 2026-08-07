@@ -7,6 +7,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 Nothing yet.
 
+## [0.2.1] — 2026-08-07
+
+### Fixed
+- **Settings could not scroll.** `main` is `overflow-hidden` and the Settings page
+  owned no scroll container, so anything past the first screen was unreachable —
+  which in 0.2.0 meant "Back up workspace", "Delete all workspace data" and About.
+  Latent until 0.2.0 added enough cards to push them below the fold. Found by
+  running the app; no test caught it, because none render a page inside the app
+  shell.
+
 ## [0.2.0] — 2026-08-07
 
 Everything below shipped since 0.1.0.
