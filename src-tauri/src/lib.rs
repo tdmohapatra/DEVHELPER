@@ -1,6 +1,8 @@
 mod commands;
 
-use commands::{db, docker, files, mssql, network, ports, process, redis, sysprobe, system, toolchain, ws};
+use commands::{
+    db, docker, files, mssql, network, ports, process, redis, secrets, sysprobe, system, toolchain, ws,
+};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
@@ -89,6 +91,10 @@ pub fn run() {
             ws::ws_ping,
             ws::ws_close,
             ws::ws_list,
+            secrets::secret_set,
+            secrets::secret_get,
+            secrets::secret_delete,
+            secrets::secret_available,
             toolchain::toolchain_probe,
             toolchain::toolchain_install,
             toolchain::toolchain_winget_available,

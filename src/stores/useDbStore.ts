@@ -2,12 +2,14 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DbConnection } from "@/tools/lib/dbTypes";
 import {
+  credentialKey,
   findCredential,
   forgetCredential,
   rememberCredential,
   type Credential,
   type CredentialVault,
 } from "@/tools/lib/credentials";
+import { dbAccount, deleteSecret, getSecret, setSecret } from "@/lib/secrets";
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.floor(performance.now())));
 
@@ -52,6 +54,8 @@ interface DbState {
   applyCredential: (conn: DbConnection) => boolean;
   forgetCredential: (key: string) => void;
   clearCredentials: () => void;
+  /** Look this connection's password up in the OS credential store, if one was saved there. */
+  loadStoredCredential: (conn: DbConnection) => Promise<boolean>;
   pushHistory: (e: Omit<DbHistoryEntry, "id" | "at">) => void;
   clearHistory: (connId: string) => void;
   importConnections: (items: DbConnection[]) => number;
@@ -112,6 +116,24 @@ export const useDbStore = create<DbState>()(
         return true;
       },
       forgetCredential: (key) => set((s) => ({ credentials: forgetCredential(s.credentials, key) })),
+      /**
+       * Pull a password out of the OS credential store into the session vault.
+       *
+       * Returns true when one was found and applied. Nothing is stored by
+       * DevHelper as a result — the session vault is memory only, exactly as
+       * before; the OS store is simply another place to be asked.
+       */
+      loadStoredCredential: async (conn) => {
+        const key = credentialKey(conn);
+        if (!key) return false;
+        const password = await getSecret(dbAccount(key));
+        if (password === null) return false;
+        set((s) => ({
+          passwords: { ...s.passwords, [conn.id]: password },
+          credentials: rememberCredential(s.credentials, conn, password, Date.now()),
+        }));
+        return true;
+      },
       clearCredentials: () => set({ credentials: {} }),
       pushHistory: (e) =>
         set((s) => ({
@@ -136,3 +158,29 @@ export const useDbStore = create<DbState>()(
     },
   ),
 );
+
+/**
+ * Opt-in persistence of a database password, in the OS credential store.
+ *
+ * Keyed by server account rather than by connection, matching the session
+ * vault: the same login opens every database on that server, so remembering it
+ * once covers connections created later. DevHelper still writes nothing itself.
+ */
+export async function rememberDbPasswordOnMachine(conn: DbConnection, password: string): Promise<void> {
+  const key = credentialKey(conn);
+  if (!key) throw new Error("This connection has no password to remember.");
+  await setSecret(dbAccount(key), password);
+}
+
+/** Remove a remembered database password. The session vault is untouched. */
+export async function forgetDbPasswordOnMachine(conn: DbConnection): Promise<void> {
+  const key = credentialKey(conn);
+  if (key) await deleteSecret(dbAccount(key));
+}
+
+/** Is this connection's server account remembered on this machine? */
+export async function dbPasswordRemembered(conn: DbConnection): Promise<boolean> {
+  const key = credentialKey(conn);
+  if (!key) return false;
+  return (await getSecret(dbAccount(key))) !== null;
+}

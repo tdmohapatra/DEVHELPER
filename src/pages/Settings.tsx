@@ -1,12 +1,13 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload, RefreshCw, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
 import { useAppStore } from "@/stores/useAppStore";
-import { useAiStore } from "@/stores/useAiStore";
+import { useAiStore, aiKeyRemembered, forgetAiKey, rememberAiKey } from "@/stores/useAiStore";
+import { secretsAvailable } from "@/lib/secrets";
 import { useSoundStore, playSound } from "@/lib/sound";
 import { isTauri } from "@/lib/platform";
 import { aiChat } from "@/lib/ai";
@@ -67,6 +68,7 @@ export function Settings() {
               <Labeled label="Base URL"><Input value={ai.openaiBaseUrl} onChange={(e) => ai.set({ openaiBaseUrl: e.target.value })} /></Labeled>
               <Labeled label="Model"><Input value={ai.openaiModel} onChange={(e) => ai.set({ openaiModel: e.target.value })} /></Labeled>
               <Labeled label="API Key" full><Input type="password" placeholder="sk-…" value={ai.openaiKey} onChange={(e) => ai.set({ openaiKey: e.target.value })} /></Labeled>
+              <div className="col-span-2"><RememberKey apiKey={ai.openaiKey} /></div>
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -123,6 +125,72 @@ export function Settings() {
           <UpdateCheck />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Opt-in storage of the API key in the OS credential store.
+ *
+ * The key is no longer written to local storage, so without this it is retyped
+ * every launch. Remembering it puts it where the platform keeps credentials,
+ * not in a file DevHelper's own backup would copy.
+ */
+function RememberKey({ apiKey }: { apiKey: string }) {
+  const [available, setAvailable] = useState(false);
+  const [remembered, setRemembered] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const can = await secretsAvailable();
+      if (!live) return;
+      setAvailable(can);
+      if (can) setRemembered(await aiKeyRemembered());
+    })();
+    return () => { live = false; };
+  }, []);
+
+  if (!available) {
+    return (
+      <p className="text-[11px] text-muted-foreground">
+        The key is kept in memory for this session only and is never written to DevHelper's storage.
+        {!isTauri() && " Remembering it between launches needs the desktop app."}
+      </p>
+    );
+  }
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      if (remembered) {
+        await forgetAiKey();
+        setRemembered(false);
+        toast.success("Key removed from the credential store");
+      } else {
+        if (!apiKey.trim()) return toast.error("Enter the key first");
+        await rememberAiKey(apiKey);
+        setRemembered(true);
+        toast.success("Key saved to the OS credential store");
+      }
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant={remembered ? "secondary" : "outline"} onClick={toggle} disabled={busy}>
+        <KeyRound /> {remembered ? "Remembered on this machine" : "Remember on this machine"}
+      </Button>
+      <span className="text-[11px] text-muted-foreground">
+        {remembered
+          ? "Stored in the Windows Credential Manager, not in DevHelper's own data — a workspace backup does not contain it."
+          : "Otherwise the key is kept in memory for this session only and retyped next launch."}
+      </span>
     </div>
   );
 }

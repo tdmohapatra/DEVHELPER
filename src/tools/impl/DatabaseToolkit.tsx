@@ -37,7 +37,8 @@ import { toast } from "@/components/ui/toast";
 import { invokeNative, isTauri } from "@/lib/platform";
 import { log } from "@/lib/logBus";
 import { cn } from "@/lib/utils";
-import { useDbStore } from "@/stores/useDbStore";
+import { useDbStore, rememberDbPasswordOnMachine, forgetDbPasswordOnMachine } from "@/stores/useDbStore";
+import { secretsAvailable } from "@/lib/secrets";
 import { useApiStore } from "@/stores/useApiStore";
 import {
   DB_ENGINES,
@@ -165,6 +166,7 @@ export function DatabaseToolkit() {
   const credentials = useDbStore((s) => s.credentials);
   const rememberCredential = useDbStore((s) => s.rememberCredential);
   const applyCredential = useDbStore((s) => s.applyCredential);
+  const loadStoredCredential = useDbStore((s) => s.loadStoredCredential);
   const forgetCredential = useDbStore((s) => s.forgetCredential);
   const pushHistory = useDbStore((s) => s.pushHistory);
   const history = useDbStore((s) => s.history);
@@ -353,10 +355,18 @@ export function DatabaseToolkit() {
   // applied to the active connection without asking again.
   const reused = active ? findCredential(credentials, active) : undefined;
   useEffect(() => {
-    if (active && !passwords[active.id] && applyCredential(active)) {
+    if (!active) return;
+    if (passwords[active.id]) return;
+    if (applyCredential(active)) {
       log.info("db:credentials", `Reused the saved password for ${credentialKey(active)}`);
+      return;
     }
-  }, [active, passwords, applyCredential]);
+    // Nothing in this session's vault. Ask the OS credential store, which only
+    // has an entry if someone explicitly chose to remember this account.
+    void loadStoredCredential(active).then((found) => {
+      if (found) log.info("db:credentials", `Loaded the remembered password for ${credentialKey(active)}`);
+    });
+  }, [active, passwords, applyCredential, loadStoredCredential]);
 
   const engineReady = (e: DbEngine) => DB_ENGINES.find((x) => x.id === e)?.ready ?? false;
   const needsPassword =
@@ -801,6 +811,10 @@ export function DatabaseToolkit() {
                       onClick={() => {
                         forgetCredential(reused.key);
                         setPassword(active.id, "");
+                        // Forgetting has to reach the OS store too, or the next
+                        // time this connection is opened the password comes
+                        // straight back and the button looks broken.
+                        void forgetDbPasswordOnMachine(active);
                         log.info("db:credentials", `Forgot the password for ${reused.key}`);
                       }}
                     >
@@ -850,7 +864,18 @@ export function DatabaseToolkit() {
 
               {needsPassword && (
                 <PasswordUnlock
-                  onSubmit={(pw) => setPassword(active.id, pw)}
+                  conn={active}
+                  onSubmit={(pw, remember) => {
+                    setPassword(active.id, pw);
+                    if (!remember) return;
+                    // Saved before it has been proved against the server: the
+                    // alternative is asking again after a successful connect,
+                    // and a wrong password saved here is corrected the next
+                    // time one is entered.
+                    rememberDbPasswordOnMachine(active, pw)
+                      .then(() => toast.success("Password saved to the Windows Credential Manager"))
+                      .catch((e) => toast.error((e as Error).message));
+                  }}
                 />
               )}
 
@@ -1100,16 +1125,41 @@ function blankConnection(): DbConnection {
   return { id: "", name: "New connection", engine: "postgres", host: "localhost", port: 5432, database: "", user: "", safeMode: true };
 }
 
-function PasswordUnlock({ onSubmit }: { onSubmit: (pw: string) => void }) {
+/**
+ * Ask for the password that unlocks a connection.
+ *
+ * "Remember" is opt-in and per server account, and it stores the password in
+ * the OS credential store rather than in DevHelper — which still writes no
+ * password anywhere of its own. Offered only where a credential store actually
+ * answered a probe, so the box never appears where ticking it would fail.
+ */
+function PasswordUnlock({ conn, onSubmit }: { conn: DbConnection; onSubmit: (pw: string, remember: boolean) => void }) {
   const [pw, setPw] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [canRemember, setCanRemember] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void secretsAvailable().then((ok) => live && setCanRemember(ok));
+    return () => { live = false; };
+  }, []);
+
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); onSubmit(pw); }}
-      className="flex items-center gap-2 rounded-md border border-border bg-secondary/40 p-2"
+      onSubmit={(e) => { e.preventDefault(); onSubmit(pw, remember); }}
+      className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-secondary/40 p-2"
     >
-      <span className="text-xs text-muted-foreground">Password (session only, never saved):</span>
+      <span className="text-xs text-muted-foreground">Password for {credentialKey(conn) ?? "this connection"}:</span>
       <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} className="h-8 max-w-xs" autoFocus />
       <Button size="sm" type="submit" disabled={!pw}>Unlock</Button>
+      {canRemember ? (
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          Remember in the Windows Credential Manager
+        </label>
+      ) : (
+        <span className="text-[11px] text-muted-foreground">Session only — never written to DevHelper's storage.</span>
+      )}
     </form>
   );
 }

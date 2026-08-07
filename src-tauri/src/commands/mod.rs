@@ -8,5 +8,6 @@ pub mod files;
 pub mod redis;
 pub mod db;
 pub mod mssql;
+pub mod secrets;
 pub mod toolchain;
 pub mod ws;
