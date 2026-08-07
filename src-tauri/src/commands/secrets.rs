@@ -93,11 +93,10 @@ mod tests {
     fn reading_a_secret_that_was_never_stored_is_not_an_error() {
         // A fresh, deliberately unusual account name: nothing has stored one.
         let account = "devhelper-test-never-stored-9f3a".to_string();
-        match secret_get(account) {
-            Ok(v) => assert!(v.is_none()),
-            // A machine with no credential store at all reports an error here,
-            // which is a legitimate environment rather than a failing test.
-            Err(_) => {}
+        // An `Err` here means the machine has no credential store at all, which
+        // is a legitimate environment rather than a failing test.
+        if let Ok(v) = secret_get(account) {
+            assert!(v.is_none());
         }
     }
 

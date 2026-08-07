@@ -5,9 +5,9 @@
 //!   - SQLite     — rusqlite (bundled), runs on the blocking pool.
 //!   - SQL Server — tiberius over tokio TCP (values extracted via a typed cascade).
 //!   - MySQL      — mysql_async.
-//!   - Oracle     — feature-gated (`--features oracle`); requires Oracle Instant Client at
-//!                  build + runtime, so it is OFF by default and the default build never
-//!                  links it. UI marks it accordingly.
+//!   - Oracle     — feature-gated (`--features oracle`); requires Oracle Instant Client
+//!     at build + runtime, so it is OFF by default and the default build never links it.
+//!     UI marks it accordingly.
 //!
 //! This is a read/execute surface for a developer tool: values are returned as strings for
 //! display. Destructive-statement gating and safe-mode live in the frontend.
@@ -453,7 +453,7 @@ fn mysql_value_to_string(v: &mysql_async::Value) -> Option<String> {
         Value::Time(neg, days, h, mi, s, us) => Some(format!(
             "{}{:02}:{:02}:{:02}.{:06}",
             if *neg { "-" } else { "" },
-            (*days as u32) * 24 + *h as u32,
+            *days * 24 + *h as u32,
             mi,
             s,
             us

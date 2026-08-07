@@ -30,7 +30,8 @@ pub fn list_processes(filter: Option<String>) -> Vec<ProcInfo> {
         })
         .collect();
 
-    procs.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb));
+    // Descending, so the heaviest processes are the ones kept by the truncate below.
+    procs.sort_by_key(|p| std::cmp::Reverse(p.memory_mb));
     procs.truncate(300);
     procs
 }

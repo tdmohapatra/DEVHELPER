@@ -87,7 +87,7 @@ fn find_pid_for_port(port: u16) -> Result<Option<u32>, String> {
         let local = cols[1];
         // Match the local address port exactly (avoid substring false positives).
         if let Some(idx) = local.rfind(':') {
-            if &local[idx..] == needle && cols[3] == "LISTENING" {
+            if local[idx..] == *needle && cols[3] == "LISTENING" {
                 if let Ok(pid) = cols[4].parse::<u32>() {
                     return Ok(Some(pid));
                 }

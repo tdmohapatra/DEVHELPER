@@ -87,7 +87,7 @@ fn emit(app: &AppHandle, id: &str, kind: &str, channel: &str, payload: impl Into
 /// Reply values as a flat list of strings, for the shapes pub/sub uses.
 fn as_strings(value: &Value) -> Vec<String> {
     match value {
-        Value::Array(items) => items.iter().map(|v| flatten(v)).collect(),
+        Value::Array(items) => items.iter().map(flatten).collect(),
         other => vec![flatten(other)],
     }
 }

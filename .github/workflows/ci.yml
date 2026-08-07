@@ -1,0 +1,57 @@
+name: CI
+
+# Runs on every push and pull request. Deliberately does not build the Tauri
+# bundle: that needs the signing key, and a check that requires a secret cannot
+# run on a fork's pull request. Bundling is the release workflow's job.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+
+      - name: Test
+        run: npm test
+
+      # Catches a broken import or a chunk that stopped splitting, neither of
+      # which the typecheck or the tests would notice.
+      - name: Build
+        run: npx vite build
+
+  native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # `cargo check` alone misses the tests, which is where the credential and
+      # protocol logic is covered.
+      - name: Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
