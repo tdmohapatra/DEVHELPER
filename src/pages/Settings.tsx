@@ -1,15 +1,27 @@
-import { useState, type ReactNode } from "react";
-import { Moon, Sun, Trash2, Bot, Volume2, VolumeX } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Moon, Sun, Trash2, Bot, Volume2, VolumeX, Download, Upload, ShieldAlert, HardDriveDownload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CopyButton } from "@/components/CopyButton";
 import { useAppStore } from "@/stores/useAppStore";
 import { useAiStore } from "@/stores/useAiStore";
 import { useSoundStore, playSound } from "@/lib/sound";
 import { isTauri } from "@/lib/platform";
 import { aiChat } from "@/lib/ai";
 import { toast } from "@/components/ui/toast";
+import {
+  APP_VERSION,
+  clearWorkspace,
+  exportWorkspace,
+  formatBytes,
+  parseWorkspace,
+  presentStores,
+  restoreWorkspace,
+  storageFootprint,
+  STORES,
+} from "@/lib/workspace";
 
 export function Settings() {
   const theme = useAppStore((s) => s.theme);
@@ -95,24 +107,7 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      <Card className="mb-4">
-        <CardHeader>
-          <CardTitle>Data</CardTitle>
-          <CardDescription>Favorites, recents and theme are stored locally in this browser/app profile.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              localStorage.removeItem("devhelper-app");
-              toast.success("Local data cleared — reload to apply");
-            }}
-          >
-            <Trash2 /> Clear local data
-          </Button>
-        </CardContent>
-      </Card>
+      <WorkspaceCard />
 
       <Card>
         <CardHeader>
@@ -120,13 +115,176 @@ export function Settings() {
         </CardHeader>
         <CardContent className="space-y-1 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <span>DevHelper 0.1.0</span>
+            <span>DevHelper {APP_VERSION}</span>
             <Badge variant={isTauri() ? "success" : "secondary"}>{isTauri() ? "Desktop app" : "Browser dev mode"}</Badge>
           </div>
           <p>Local-first developer toolbox. No data leaves your machine unless you enable AI.</p>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Backup, restore and delete — the three things you cannot do from anywhere else.
+ *
+ * Everything DevHelper saves lives in this app profile's local storage, which no
+ * backup tool sees and which a webview reset wipes. This card is the only route
+ * in and out.
+ */
+function WorkspaceCard() {
+  const [restoreText, setRestoreText] = useState("");
+  const [includeSecrets, setIncludeSecrets] = useState(false);
+  const [showRestore, setShowRestore] = useState(false);
+
+  // Read at render: after a restore, a reload is required anyway, so a stale
+  // footprint here would be misleading rather than merely out of date.
+  const present = presentStores(localStorage);
+  const footprint = storageFootprint(localStorage);
+  const totalBytes = footprint.reduce((n, f) => n + f.bytes, 0);
+  const parsed = useMemo(() => (restoreText.trim() ? parseWorkspace(restoreText) : null), [restoreText]);
+
+  const backup = () =>
+    exportWorkspace(localStorage, {
+      includeSecrets,
+      appVersion: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+    });
+
+  const download = () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([backup()], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `devhelper-workspace-${stamp}${includeSecrets ? "-with-secrets" : ""}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Workspace downloaded");
+  };
+
+  const doRestore = () => {
+    if (!parsed || parsed.known.length === 0) return;
+    const names = parsed.known.map((s) => s.label).join(", ");
+    if (!confirm(`Replace ${names} with the contents of this file? Current data in those areas is overwritten and cannot be recovered from inside DevHelper.`)) {
+      return;
+    }
+    const result = restoreWorkspace(localStorage, parsed);
+    toast.success(`Restored ${result.restored.length} store(s) — reload to apply`);
+    setRestoreText("");
+  };
+
+  const doClear = () => {
+    if (!confirm("Delete every saved request, environment, connection, snippet, project, debug session and preference? Export a backup first — this cannot be undone.")) {
+      return;
+    }
+    const cleared = clearWorkspace(localStorage);
+    toast.success(`Cleared ${cleared.length} store(s) — reload to apply`);
+  };
+
+  return (
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><HardDriveDownload className="size-4" /> Workspace data</CardTitle>
+        <CardDescription>
+          Everything you have saved — requests, environments, connections, snippets, projects, debug sessions and
+          preferences — is stored in this app profile only. It is not a file on disk, so nothing else backs it up.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">
+            {present.length} store(s) in use · {formatBytes(totalBytes)}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {footprint.map((f) => {
+              const spec = STORES.find((s) => s.key === f.key)!;
+              return (
+                <Badge key={f.key} variant="outline" className="text-[10px]" title={spec.describes}>
+                  {spec.label} {formatBytes(f.bytes)}
+                </Badge>
+              );
+            })}
+            {footprint.length === 0 && <span className="text-xs text-muted-foreground">Nothing saved yet.</span>}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeSecrets}
+              onChange={(e) => setIncludeSecrets(e.target.checked)}
+              className="accent-destructive"
+            />
+            Include secret values (currently just the AI API key)
+          </label>
+          {includeSecrets && (
+            <p className="text-[11px] text-destructive">
+              <ShieldAlert className="mr-1 inline size-3" />
+              The file will contain your API key in plain text. Treat it as a credential.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={download} disabled={present.length === 0}>
+              <Download /> Back up workspace
+            </Button>
+            <CopyButton value={backup()} label="JSON" />
+            <Button size="sm" variant="outline" onClick={() => setShowRestore((v) => !v)}>
+              <Upload /> Restore
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Database passwords are never included — they are held in memory for the session only and are not saved
+            anywhere.
+          </p>
+        </div>
+
+        {showRestore && (
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <div className="text-sm font-medium">Restore from a backup</div>
+            <textarea
+              className="mono h-32 w-full rounded-md border border-input bg-transparent p-2 text-[11px]"
+              placeholder="Paste a devhelper-workspace-….json file here."
+              value={restoreText}
+              onChange={(e) => setRestoreText(e.target.value)}
+            />
+            {parsed && (
+              <div className="space-y-1 text-[11px]">
+                <p className="text-muted-foreground">
+                  {parsed.known.length} store(s) readable
+                  {parsed.appVersion && ` · written by ${parsed.appVersion}`}
+                  {parsed.exportedAt && ` · ${parsed.exportedAt.slice(0, 10)}`}
+                  {parsed.secretsRedacted && " · exported without secrets, so the AI key will restore empty"}.
+                </p>
+                {parsed.known.length > 0 && (
+                  <p className="text-muted-foreground">Replaces: {parsed.known.map((s) => s.label).join(", ")}.</p>
+                )}
+                {parsed.problems.map((p, i) => (
+                  <p key={i} className="text-warning">{p}</p>
+                ))}
+              </div>
+            )}
+            <Button size="sm" onClick={doRestore} disabled={!parsed || parsed.known.length === 0}>
+              <Upload /> Replace these stores
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              A restore replaces whole stores rather than merging — a half-merged collection is a state neither the
+              backup nor your current data describes. Reload the app afterwards.
+            </p>
+          </div>
+        )}
+
+        <div className="border-t border-border pt-3">
+          <Button variant="destructive" size="sm" onClick={doClear} disabled={present.length === 0}>
+            <Trash2 /> Delete all workspace data
+          </Button>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Removes all {present.length} store(s), not just preferences. Back up first.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
