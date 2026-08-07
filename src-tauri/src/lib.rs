@@ -47,6 +47,9 @@ pub fn run() {
         .manage(ws::WsRegistry::default())
         // Live NATS subscriptions, owned by Rust and addressed by id.
         .manage(nats::NatsRegistry::default())
+        // Held Redis connections for SUBSCRIBE and MONITOR, which a
+        // command-per-call client cannot do.
+        .manage(redis::RedisWatchers::default())
         .setup(move |app| {
             // System tray with a quick-actions menu.
             let open = MenuItem::with_id(app, "open", "Open DevHelper", true, None::<&str>)?;
@@ -83,6 +86,9 @@ pub fn run() {
             sysprobe::check_environment,
             files::read_text_file,
             redis::redis_exec,
+            redis::redis_watch,
+            redis::redis_unwatch,
+            redis::redis_watches,
             db::db_test,
             db::db_query,
             db::db_objects,

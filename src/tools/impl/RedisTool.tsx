@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Plug, Search, Trash2, Save, RefreshCw, Terminal, AlertTriangle, Activity, Users, Radio, Clock, KeyRound } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -36,14 +36,29 @@ import {
 } from "@/tools/lib/redisClients";
 import { brokerUnreachableEvent, redisCommandEvent, redisHealthEvent } from "@/tools/lib/mqCapture";
 import { useHandoffStore } from "@/stores/useHandoffStore";
+import {
+  REDIS_EVENT,
+  appendLine,
+  channelCounts,
+  commandCounts,
+  filterLines,
+  startWatch,
+  stopWatch,
+  watchCommand,
+  watchTargetProblem,
+  type RedisStreamEvent,
+  type WatchLine,
+  type WatchTarget,
+} from "@/tools/lib/redisWatch";
 
-type Tab = "keys" | "health" | "clients" | "pubsub" | "slowlog" | "console";
+type Tab = "keys" | "health" | "clients" | "pubsub" | "live" | "slowlog" | "console";
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: "keys", label: "Keys", icon: <KeyRound className="size-3.5" /> },
   { id: "health", label: "Health", icon: <Activity className="size-3.5" /> },
   { id: "clients", label: "Clients", icon: <Users className="size-3.5" /> },
   { id: "pubsub", label: "Pub/Sub", icon: <Radio className="size-3.5" /> },
+  { id: "live", label: "Live", icon: <Activity className="size-3.5" /> },
   { id: "slowlog", label: "Slow log", icon: <Clock className="size-3.5" /> },
   { id: "console", label: "Console", icon: <Terminal className="size-3.5" /> },
 ];
@@ -481,6 +496,10 @@ export function RedisTool() {
             </div>
           )}
 
+          {tab === "live" && (
+            <LiveWatch target={{ host, port: Number(port) || 6379, password: password || undefined, db: Number(db) || 0 }} />
+          )}
+
           {tab === "slowlog" && (
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
@@ -621,6 +640,185 @@ export function RedisTool() {
         </>
       )}
     </ToolShell>
+  );
+}
+
+/**
+ * A connection held open: pub/sub messages, or every command via MONITOR.
+ *
+ * The rest of this tool opens a connection per command, which is right for GET
+ * and INFO and cannot do either of these. SUBSCRIBE puts a connection into a
+ * mode where it stops answering ordinary commands; MONITOR turns it into a
+ * stream of everything the server runs. Both need a connection that stays open,
+ * which is why they live behind a separate native call.
+ */
+function LiveWatch({ target }: { target: WatchTarget }) {
+  const [mode, setMode] = useState<"subscribe" | "psubscribe" | "monitor">("subscribe");
+  const [channel, setChannel] = useState("news");
+  const [watches, setWatches] = useState<{ id: string; describes: string }[]>([]);
+  const [feed, setFeed] = useState<WatchLine[]>([]);
+  const [filter, setFilter] = useState("");
+  const [paused, setPaused] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const seq = useRef(0);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let live = true;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const stop = await listen<RedisStreamEvent>(REDIS_EVENT, (event) => {
+        const e = event.payload;
+        if (e.kind === "closed") {
+          setWatches((cur) => cur.filter((w) => w.id !== e.id));
+          return;
+        }
+        if (e.kind === "error") {
+          setError(e.payload);
+          return;
+        }
+        // Pausing freezes the view only; the connection stays open, so the
+        // server side is unaffected and nothing is silently skipped.
+        if (pausedRef.current) return;
+        seq.current += 1;
+        setFeed((cur) => appendLine(cur, { ...e, at: Date.now(), seq: seq.current }));
+      });
+      if (live) unlisten = stop;
+      else stop();
+    })();
+    return () => { live = false; unlisten?.(); };
+  }, []);
+
+  const problem = watchTargetProblem(mode, channel);
+
+  const start = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const args = watchCommand(mode, channel);
+      const id = await startWatch(target, args);
+      setWatches((cur) => [...cur, { id, describes: args.join(" ") }]);
+      toast.success(`Watching ${args.join(" ")}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stop = async (id: string) => {
+    await stopWatch(id);
+    setWatches((cur) => cur.filter((w) => w.id !== id));
+  };
+
+  const shown = filterLines(feed, filter);
+  const channels = channelCounts(feed);
+  const commands = commandCounts(feed);
+  const monitoring = watches.some((w) => w.describes === "MONITOR");
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Mode</span>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as typeof mode)}
+            className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
+          >
+            <option value="subscribe">Subscribe (exact channel)</option>
+            <option value="psubscribe">Pattern subscribe (glob)</option>
+            <option value="monitor">Monitor (every command)</option>
+          </select>
+        </label>
+        {mode !== "monitor" && (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">{mode === "subscribe" ? "Channel" : "Pattern"}</span>
+            <Input className="h-8 w-48 font-mono text-xs" value={channel} onChange={(e) => setChannel(e.target.value)} />
+          </label>
+        )}
+        <Button size="sm" onClick={start} disabled={busy || !!problem || !isTauri()}>
+          <Radio className="size-3.5" /> Start
+        </Button>
+        {channel && problem && <span className="text-[11px] text-warning">{problem}</span>}
+      </div>
+
+      {mode === "monitor" && !monitoring && (
+        <p className="rounded-md border border-warning/40 bg-warning/5 p-2 text-[11px]">
+          <AlertTriangle className="mr-1 inline size-3 text-warning" />
+          MONITOR makes the server do extra work for every command any client runs, and it shows every key and value
+          in flight. It is a diagnostic to turn on briefly, not something to leave running against production.
+        </p>
+      )}
+
+      {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">{error}</p>}
+
+      {watches.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {watches.map((w) => (
+            <div key={w.id} className="flex items-center gap-2 rounded border border-border px-2 py-1 text-xs">
+              <Radio className="size-3 text-success" />
+              <span className="mono truncate">{w.describes}</span>
+              <Button size="sm" variant="ghost" className="ml-auto h-6" onClick={() => stop(w.id)}>Stop</Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-muted-foreground">{feed.length} line(s)</span>
+        <Input className="h-8 w-56" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter channel or text" />
+        <Button size="sm" variant={paused ? "secondary" : "ghost"} onClick={() => setPaused((p) => !p)}>
+          {paused ? "Resume" : "Pause"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setFeed([])}><Trash2 className="size-3.5" /> Clear</Button>
+        {feed.length > 0 && <CopyButton value={shown.map((l) => l.payload).join("\n")} label="Lines" />}
+      </div>
+      {paused && <p className="text-[11px] text-muted-foreground">Paused — the connection is still open, so nothing is being missed on the server.</p>}
+
+      {commands.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {commands.slice(0, 12).map((c) => (
+            <button key={c.command} onClick={() => setFilter(c.command)} className="rounded-full bg-secondary px-2 py-0.5 text-[10px] hover:bg-primary/15 hover:text-primary">
+              {c.command} · {c.count}
+            </button>
+          ))}
+        </div>
+      )}
+      {channels.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {channels.slice(0, 12).map((c) => (
+            <button key={c.channel} onClick={() => setFilter(c.channel)} className="rounded-full bg-secondary px-2 py-0.5 text-[10px] hover:bg-primary/15 hover:text-primary">
+              {c.channel} · {c.count}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {feed.length === 0
+            ? "Nothing yet. Subscribe to a channel, or run Monitor to see every command the server handles."
+            : "No line matches the filter."}
+        </p>
+      ) : (
+        <div className="max-h-[46vh] overflow-auto rounded-md border border-border">
+          {shown.map((l) => (
+            <div key={l.seq} className="flex items-start gap-2 border-b border-border px-2 py-1 text-[11px] last:border-b-0">
+              <span className="mono shrink-0 text-muted-foreground">{new Date(l.at).toLocaleTimeString()}</span>
+              {l.channel && <span className="mono shrink-0 text-primary">{l.channel}</span>}
+              {l.kind === "status" && <Badge variant="outline" className="shrink-0 text-[9px]">status</Badge>}
+              <span className="mono min-w-0 flex-1 whitespace-pre-wrap break-all">{l.payload}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
