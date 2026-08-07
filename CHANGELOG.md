@@ -3,7 +3,13 @@
 All notable changes to DevHelper are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Post-v1 evolution, 2026-07-25
+## [Unreleased]
+
+Nothing yet.
+
+## [0.2.0] — 2026-08-07
+
+First release with automatic updates. Everything below shipped since 0.1.0.
 
 ### Added — Workspace backup, palette search, credentials, shortcuts, live protocols
 - **Back up and restore everything.** All saved work lived in the webview's local storage
@@ -21,8 +27,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   to the active one. Anything unclaimed stays visible everywhere.
 - **Keyboard shortcuts are rebindable**, with conflicts reported rather than decided by
   iteration order, and matching on the physical key so bindings survive a layout change.
-- **Window position, single instance, and an update check.** The updater is inert until a
-  release feed is configured and says so plainly (`docs/UPDATES.md`).
+- **Automatic updates.** DevHelper checks GitHub Releases for a newer signed build and can
+  install it from Settings → About. Releases are built and signed by CI from a tag and
+  published as drafts, so nothing is offered to installed copies until it is reviewed. A
+  build signed with the wrong key is refused before it installs. See `docs/UPDATES.md`.
+- **Window position remembered, and one instance at a time.** Launching DevHelper again
+  raises the copy already running, which is what the tray icon and global hotkey do too.
 - **NATS speaks its client protocol**: publish, request-reply and live subscriptions on
   4222, not only the read-only monitoring port.
 - **Redis holds a connection open** for SUBSCRIBE, PSUBSCRIBE and MONITOR.

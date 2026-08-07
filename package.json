@@ -1,6 +1,6 @@
 {
   "name": "devhelper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DevHelper — Your Everyday Developer Toolbox. A fast, local-first Windows developer utility app.",
   "type": "module",
   "private": true,
