@@ -133,6 +133,16 @@ window.SMX = (function () {
   .smx-meet div { width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%;
                   border:2px solid #ec4899; background:rgba(236,72,153,.35); }
 
+  /* ---- live layers ---- */
+  .smx-live-dot { pointer-events:auto; }
+  .smx-live-dot .glyph { display:block; width:22px; height:22px; line-height:22px; text-align:center;
+                         font-size:14px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
+  .smx-live-dot.tracked .glyph { filter: drop-shadow(0 0 6px #ec4899); }
+  .smx-live-dot.tracked::after { content:''; position:absolute; inset:-5px; border-radius:50%;
+                                 border:2px solid #ec4899; animation: smx-mark 1.6s infinite; }
+  .smx-home span { display:block; width:26px; height:26px; line-height:24px; text-align:center;
+                   color:#ec4899; font-size:20px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.8)); }
+
   /* ---- profile chart ---- */
   .smx-chart { width:100%; height:110px; display:block; touch-action:none; }
   .smx-chart .grid { stroke: var(--border); stroke-width:1; }
@@ -200,6 +210,7 @@ window.SMX = (function () {
     walk: '<circle cx="12" cy="4.5" r="2"/><path d="M12 7v6l-3 8M12 13l3 8M12 10l-3.5 2M12 10l3.5 2"/>',
     eraser: '<path d="M7 20h10"/><path d="M9 17L4 12l8-8 5 5-8 8z"/>',
     spinner: '<circle cx="12" cy="12" r="8" stroke-dasharray="34 18"/>',
+    satellite: '<path d="M6 10l4-4 3 3-4 4z"/><path d="M13 17l4-4 3 3-4 4z"/><path d="M10 14l4-4"/><path d="M4 20l3-3M17 7l3-3"/>',
   };
 
   /** `icon('play')` → an inline SVG string sized for buttons and tab strips. */

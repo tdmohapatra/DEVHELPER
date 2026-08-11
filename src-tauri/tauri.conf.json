@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://router.project-osrm.org https://nominatim.openstreetmap.org https://api.rainviewer.com https://api.tomtom.com https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.tile.opentopomap.org https://*.tile-cyclosm.openstreetmap.fr https://api.open-meteo.com https://air-quality-api.open-meteo.com https://macrostrat.org https://tiles.macrostrat.org https://earthquake.usgs.gov https://basemap.nationalmap.gov"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://router.project-osrm.org https://nominatim.openstreetmap.org https://api.rainviewer.com https://api.tomtom.com https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.tile.opentopomap.org https://*.tile-cyclosm.openstreetmap.fr https://api.open-meteo.com https://air-quality-api.open-meteo.com https://macrostrat.org https://tiles.macrostrat.org https://earthquake.usgs.gov https://basemap.nationalmap.gov https://celestrak.org https://api.weather.gov https://overpass-api.de https://ll.thespacedevs.com https://marine-api.open-meteo.com https://atlas.ripe.net https://stat.ripe.net https://tiles.openseamap.org https://gibs.earthdata.nasa.gov https://tilecache.rainviewer.com https://api.airplanes.live https://api.nasa.gov https://overpass.kumi.systems"
     },
     "trayIcon": {
       "id": "main",
@@ -34,7 +34,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

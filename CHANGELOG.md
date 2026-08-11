@@ -60,6 +60,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **Free, key-less data sources**, all attributed: OSRM, Open-Meteo (elevation,
   weather, air quality), Macrostrat, USGS, Esri.
 
+### Added — Live layers, my location, proximity alerts and tracking (branch)
+- **A Live tab** in Map Lab: twelve data layers over one map, each a checkbox with
+  its source named, its own refresh interval and its own status line.
+  - 🛰️ **Satellites** — CelesTrak element sets, propagated on the device with a
+    vendored satellite.js. Space stations, weather satellites, the GPS
+    constellation or the first 60 Starlink; positions recomputed every 5 s with
+    no request per frame.
+  - ✈️ **Aircraft** — live ADS-B from airplanes.live, heading-rotated, with
+    altitude, ground speed and climb state.
+  - 🌋 **Earthquakes** — USGS, sized and coloured by magnitude on the severity ramp.
+  - 🌦️ **Weather radar** — RainViewer's newest frame.
+  - 🌧️ **Weather alerts** — NOAA/NWS at your location. United States only, and it
+    says so rather than looking broken elsewhere.
+  - 🚆 **Public transport** — OSM stations and stops from zoom 13. Infrastructure,
+    not vehicles: live positions need an operator's GTFS-RT feed.
+  - 🏙️ **Places** — OSM hospitals, pharmacies, fuel, water and police from zoom 12.
+  - 🌊 **Ocean** — OpenSeaMap seamarks plus Open-Meteo Marine sea state.
+  - ☄️ **Asteroids** — NASA NeoWs close approaches for the week, in lunar distances.
+  - 🚀 **Space launches** — Launch Library 2, each on its pad with a countdown.
+  - 🌐 **Internet network** — RIPE Atlas probes around you, connected or not.
+  - 🌍 **NASA imagery** — GIBS MODIS true colour from yesterday's pass.
+- **A location of your own**: GPS, the map centre, or alt-click to place it. It
+  draws a radius circle, and everything distance-related is measured from it.
+- **Proximity alerts**, one rule per layer with its own thresholds: an aircraft
+  below a chosen altitude within a chosen distance, a quake over a magnitude
+  floor, a satellite overhead, a launch inside a time window, a close approach
+  inside so many lunar distances, a rough sea state, a severe warning where you
+  are. Each fires once per object, logs with a jump-to-map button, and can be
+  silenced without being switched off.
+- **Tracking**: click any live object and follow it. The camera can stay on it, a
+  trail draws behind it, and a readout gives position, altitude, speed and
+  distance from you.
+
 ### Changed
 - **CSP widened** for the map: `img-src` now allows any HTTPS image (tiles), and
   `connect-src` names the routing, geocoding, elevation, weather, geology and

@@ -439,11 +439,11 @@ describe("simulation tab", () => {
     play.click();
     expect(SMX().sim.state.playing).toBe(true);
     const started = SMX().sim.state.t;
-    await tick(80);
+    // Wait for the advance rather than assuming a frame lands inside a fixed
+    // window: the loop is requestAnimationFrame-driven and the full suite starves it.
+    await vi.waitUntil(() => SMX().sim.state.t > started, { timeout: 10000 });
     play.click();
     expect(SMX().sim.state.playing).toBe(false);
-    // The clock advances by rate × elapsed real time, never backwards.
-    expect(SMX().sim.state.t).toBeGreaterThan(started);
     expect(SMX().sim.state.t).toBeLessThanOrEqual(SMX().sim.state.to);
   });
 
