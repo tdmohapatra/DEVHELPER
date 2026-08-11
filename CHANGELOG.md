@@ -5,7 +5,68 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added — Gadgets, and a map with a simulation lab
+- **New `Gadgets` sidebar category** for things that are not developer plumbing.
+  Weather, notes and email are planned; only the map exists today, so the category
+  carries one tool rather than four dead rows.
+- **Star Map**, vendored from the Star Map project's self-contained desktop build
+  (`scripts/vendor-star-map.mjs`) and run in an iframe from our own origin: GPS,
+  multi-waypoint routing with turn-by-turn, trip stats, offline tile caching and
+  GPX/GeoJSON import-export, unchanged from upstream. Re-run the vendor script to
+  update; its output is generated and must not be hand-edited.
+- **Map Lab** (flask button, or `X`) — DevHelper's own add-on to that map, four
+  files that only ever add to it (`public/gadgets/star-map.x-*.js`):
+  - **Sim.** Several travellers on one clock. Presets cover same origin at the same
+    time (one per travel mode), staggered departures, several origins converging on
+    one destination, and three driving paces. Per agent: mode, pace, departure
+    clock. Live table of progress, remaining distance, speed, ETA and congestion
+    delay; arrival order with gaps; and *encounters* — every time two agents come
+    within 130 m, with the moment and place, clickable to jump there.
+  - **Modelled congestion.** A rush-hour curve per agent's own departure time, a
+    deterministic per-road roughness from a pattern seed, and congestion zones you
+    drop on the map. Repeatable and good for comparing departures — it is not
+    measured traffic, and the panel says so. Real congestion tiles remain the app's
+    own TomTom layer with a key.
+  - **Animated routes.** Pulsing glow, travelled-versus-remaining split, direction
+    arrows spaced by screen distance, and dashes that flow toward the destination.
+    Agents sharing a road are drawn at nested widths so none hides the others.
+  - **Terrain.** Elevation profile with hover linked to the map, climb, descent,
+    steepest grade, gradient-coloured path, and a point probe giving elevation,
+    slope, grade and which way the ground faces.
+  - **Geology.** Macrostrat bedrock tiles, Esri hillshade, USGS topo, worldwide
+    "rock unit at a point" (name, age range, lithology, source), and USGS
+    earthquake feeds sized and coloured by magnitude.
+  - **Sky.** Sunrise, sunset, solar noon, golden hour, twilight, day length and moon
+    phase computed locally; current weather, next hours and air quality; conditions
+    at five points along the route.
+  - **Alt-click the map** to pick the point every tab reads from (not shift-click —
+    Leaflet's box-zoom owns shift and swallows the click).
+  - **One meaning per colour.** Cool blues/violets/cyans identify *who* is
+    travelling (hue per travel mode, shaded when several share one); the
+    green-to-red ramp only ever reports *how bad or how steep*; magenta is only
+    ever your own picks and events. A colour key sits in the Sim and Terrain tabs.
+    The map's own palette is pulled into the same families at load — it drew the
+    selected route in severity green, alternates in the cycling violet, the GPS
+    trail in severity red and the measuring line in severity amber.
+- **Drag and mark modes, switched by double-clicking the map.** Upstream has a
+  single persisted "tap to add" preference buried in settings and nothing on screen
+  to say which way it is set, so a tap either does nothing or silently moves your
+  route. Same switch, now a gesture with a HUD pill that states what a tap will do:
+  *Drag* pans only, *Mark* drops a waypoint per tap and routes as you go. The
+  double-click that leaves mark mode undoes the point its own first click added.
+  Double-click zoom is given up for this; the buttons, wheel and pinch still zoom.
+- **The map's own calculated route is animated too**, not just simulated ones:
+  glow, direction arrows, flowing dashes, and a draw-in when a fresh route lands.
+- **Free, key-less data sources**, all attributed: OSRM, Open-Meteo (elevation,
+  weather, air quality), Macrostrat, USGS, Esri.
+
+### Changed
+- **CSP widened** for the map: `img-src` now allows any HTTPS image (tiles), and
+  `connect-src` names the routing, geocoding, elevation, weather, geology and
+  earthquake hosts. `script-src` stays `'self'` — the vendor script extracts the
+  upstream build's inline scripts to files rather than allowing `'unsafe-inline'`.
+  A custom tile URL typed into Star Map will render but cannot be pre-cached
+  offline unless its host is added to `connect-src`.
 
 ## [0.2.1] — 2026-08-07
 

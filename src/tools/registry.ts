@@ -47,6 +47,7 @@ import {
   Route as RouteIcon,
   FileCog,
   CalendarClock,
+  Map as MapIcon,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -575,6 +576,24 @@ export const TOOLS: Tool[] = [
     keywords: ["cron", "crontab", "schedule", "cronjob", "quartz", "next run", "expression", "timer"],
     route: "/tools/cron",
     component: L(() => import("./impl/CronTool"), "CronTool"),
+  },
+  {
+    id: "star-map",
+    name: "Star Map",
+    description: "Live map with a simulation lab — race departures against each other, model congestion, and read terrain, geology, sun and weather",
+    category: "gadgets",
+    icon: MapIcon,
+    keywords: [
+      "map", "star map", "gps", "location", "navigation", "route", "routing", "directions",
+      "waypoint", "gpx", "geojson", "offline", "tiles", "leaflet", "openstreetmap", "osm",
+      "trip", "distance", "search", "geocode", "places", "measure", "weather", "radar",
+      "simulation", "simulate", "traffic", "congestion", "eta", "departure", "encounter",
+      "elevation", "profile", "gradient", "slope", "aspect", "terrain", "hillshade", "contour",
+      "geology", "geologist", "bedrock", "macrostrat", "earthquake", "seismic", "usgs",
+      "sunrise", "sunset", "golden hour", "moon", "air quality", "aqi", "traveller", "traveler",
+    ],
+    route: "/tools/star-map",
+    component: L(() => import("./impl/StarMap"), "StarMap"),
   },
 ];
 

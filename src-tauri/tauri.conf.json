@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://router.project-osrm.org https://nominatim.openstreetmap.org https://api.rainviewer.com https://api.tomtom.com https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://server.arcgisonline.com https://*.tile.opentopomap.org https://*.tile-cyclosm.openstreetmap.fr https://api.open-meteo.com https://air-quality-api.open-meteo.com https://macrostrat.org https://tiles.macrostrat.org https://earthquake.usgs.gov https://basemap.nationalmap.gov"
     },
     "trayIcon": {
       "id": "main",

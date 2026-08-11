@@ -15,6 +15,7 @@ import {
   Code,
   FolderKanban,
   TerminalSquare,
+  LayoutGrid,
   type LucideIcon,
 } from "lucide-react";
 import type { CategoryId } from "./types";
@@ -36,4 +37,5 @@ export const CATEGORY_ICONS: Record<CategoryId, LucideIcon> = {
   snippets: Code,
   projects: FolderKanban,
   commands: TerminalSquare,
+  gadgets: LayoutGrid,
 };

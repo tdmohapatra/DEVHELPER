@@ -27,4 +27,5 @@ export const CATEGORY_COLORS: Record<CategoryId, CategoryColor> = {
   snippets: { text: "text-teal-500", bg: "bg-teal-500/10", bgSolid: "bg-teal-500", border: "border-teal-500/30", hoverBorder: "hover:border-teal-500/50", ring: "ring-teal-500/30" },
   projects: { text: "text-lime-500", bg: "bg-lime-500/10", bgSolid: "bg-lime-500", border: "border-lime-500/30", hoverBorder: "hover:border-lime-500/50", ring: "ring-lime-500/30" },
   commands: { text: "text-slate-500", bg: "bg-slate-500/10", bgSolid: "bg-slate-500", border: "border-slate-500/30", hoverBorder: "hover:border-slate-500/50", ring: "ring-slate-500/30" },
+  gadgets: { text: "text-yellow-500", bg: "bg-yellow-500/10", bgSolid: "bg-yellow-500", border: "border-yellow-500/30", hoverBorder: "hover:border-yellow-500/50", ring: "ring-yellow-500/30" },
 };
