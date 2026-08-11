@@ -336,6 +336,317 @@
       .map((a, i, all) => Object.assign(a, { rank: i + 1, behind: a.at - all[0].at }));
   }
 
+  /* ------------------------- observer geometry ------------------------- */
+
+  const WGS84_A = 6378137, WGS84_F = 1 / 298.257223563;
+  const WGS84_E2 = WGS84_F * (2 - WGS84_F);
+
+  /** Geodetic {lat,lng,altitude m} to earth-centred, earth-fixed metres. */
+  function toEcef(p) {
+    const phi = rad(lat(p)), lam = rad(lng(p));
+    const h = p.altitude || 0;
+    const N = WGS84_A / Math.sqrt(1 - WGS84_E2 * Math.sin(phi) ** 2);
+    return {
+      x: (N + h) * Math.cos(phi) * Math.cos(lam),
+      y: (N + h) * Math.cos(phi) * Math.sin(lam),
+      z: (N * (1 - WGS84_E2) + h) * Math.sin(phi),
+    };
+  }
+
+  /**
+   * Where to look, from an observer to a target: compass azimuth, elevation
+   * above the horizon, and slant range (line of sight, not ground distance).
+   *
+   * Negative elevation means the target is below the horizon: the Earth is in
+   * the way, and no amount of looking will find it.
+   */
+  function lookAngles(observer, target) {
+    const o = toEcef(observer), t = toEcef(target);
+    const dx = t.x - o.x, dy = t.y - o.y, dz = t.z - o.z;
+    const phi = rad(lat(observer)), lam = rad(lng(observer));
+    const sinP = Math.sin(phi), cosP = Math.cos(phi), sinL = Math.sin(lam), cosL = Math.cos(lam);
+    const east = -sinL * dx + cosL * dy;
+    const north = -sinP * cosL * dx - sinP * sinL * dy + cosP * dz;
+    const up = cosP * cosL * dx + cosP * sinL * dy + sinP * dz;
+    const range = Math.hypot(dx, dy, dz);
+    return {
+      azimuth: (deg(Math.atan2(east, north)) + 360) % 360,
+      elevation: range > 0 ? deg(Math.asin(up / range)) : 0,
+      range,
+      groundRange: Math.hypot(east, north),
+    };
+  }
+
+  /**
+   * Radius of the ground circle inside which an object at `altitude` metres is
+   * above the horizon: its footprint. Anyone outside it cannot see it at all,
+   * whatever the weather.
+   */
+  function horizonRadius(altitude) {
+    if (!(altitude > 0)) return 0;
+    return R * Math.acos(R / (R + altitude));
+  }
+
+  /** How far away the horizon is for an eye `height` metres above the ground. */
+  const horizonDistance = (height) => Math.sqrt(Math.max(0, 2 * R * (height || 1.7)));
+
+  /* ------------------------------ the sun ------------------------------ */
+
+  /**
+   * Low-precision solar position (Astronomical Almanac form, about 0.01 degrees):
+   * the point on Earth the sun stands over, plus the sidereal angle needed to
+   * turn that into a look angle anywhere else.
+   */
+  function solarPosition(date) {
+    const n = date.valueOf() / 86400000 - 10957.5;            // days since J2000.0
+    const meanLon = 280.460 + 0.9856474 * n;
+    const meanAnom = rad(357.528 + 0.9856003 * n);
+    const eclipticLon = rad(meanLon + 1.915 * Math.sin(meanAnom) + 0.020 * Math.sin(2 * meanAnom));
+    const obliquity = rad(23.439 - 0.0000004 * n);
+    const ra = Math.atan2(Math.cos(obliquity) * Math.sin(eclipticLon), Math.cos(eclipticLon));
+    const declination = Math.asin(Math.sin(obliquity) * Math.sin(eclipticLon));
+    const gmst = ((280.46061837 + 360.98564736629 * n) % 360 + 360) % 360;
+    return {
+      declination: deg(declination),
+      rightAscension: (deg(ra) + 360) % 360,
+      gmst,
+      subsolarLat: deg(declination),
+      subsolarLng: ((deg(ra) - gmst + 540) % 360) - 180,
+    };
+  }
+
+  /** Sun elevation in degrees at a place and time. Negative is below the horizon. */
+  function sunElevation(date, latitude, longitude) {
+    const sun = solarPosition(date);
+    const hourAngle = rad(((sun.gmst + longitude - sun.rightAscension + 540) % 360) - 180);
+    const phi = rad(latitude), dec = rad(sun.declination);
+    return deg(Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(hourAngle)));
+  }
+
+  /**
+   * Is an object in sunlight, or inside the Earth's shadow?
+   *
+   * Cylindrical shadow model: on the sunward side it is always lit; on the night
+   * side it is lit only if it stands further from the Earth-sun axis than the
+   * Earth's radius. Enough to know whether a satellite can be seen at all; it
+   * ignores the penumbra, worth a few seconds at the shadow edge.
+   */
+  function isSunlit(target, date) {
+    const sun = solarPosition(date);
+    const s = toEcef({ lat: sun.subsolarLat, lng: sun.subsolarLng, altitude: 0 });
+    const len = Math.hypot(s.x, s.y, s.z);
+    const hat = { x: s.x / len, y: s.y / len, z: s.z / len };
+    const p = toEcef(target);
+    const along = p.x * hat.x + p.y * hat.y + p.z * hat.z;
+    if (along >= 0) return true;                              // sunward hemisphere
+    const perp = Math.hypot(p.x - along * hat.x, p.y - along * hat.y, p.z - along * hat.z);
+    return perp > R;
+  }
+
+  /**
+   * Can this be seen with the naked eye right now, and if not, why not?
+   *
+   * For a satellite three things must hold at once: it is high enough above the
+   * horizon to clear buildings and haze, the observer's sky is dark, and the
+   * object itself is still in sunlight. Aircraft need none of that, only to be
+   * above the horizon and close enough, so the two sunlight conditions can be
+   * switched off.
+   */
+  function nakedEye(opts) {
+    const o = opts || {};
+    const minElevation = o.minElevation === undefined ? 10 : o.minElevation;
+    const reasons = [];
+    if (!(o.elevation > minElevation)) {
+      reasons.push(o.elevation > 0 ? `only ${o.elevation.toFixed(0)}\u00b0 above the horizon` : 'below the horizon');
+    }
+    if (o.needsDarkness !== false && !(o.sunElevation < -6)) {
+      reasons.push(o.sunElevation > 0 ? 'broad daylight' : 'sky not dark yet');
+    }
+    if (o.needsSunlight !== false && o.sunlit === false) reasons.push('in the Earth\u2019s shadow');
+    if (o.range !== undefined && o.maxRange !== undefined && o.range > o.maxRange) {
+      reasons.push(`too far off, ${(o.range / 1000).toFixed(1)} km`);
+    }
+    return { visible: reasons.length === 0, reasons };
+  }
+
+  /* --------------------------- closest approach --------------------------- */
+
+  /**
+   * If this object holds its present course and speed, when does it come
+   * closest to the observer, and how close?
+   *
+   * Straight-line extrapolation on the local tangent plane: exact enough over
+   * the minutes that matter when you are waiting to see something, and honest
+   * about it, since `seconds` goes negative once the closest point has passed.
+   */
+  function closestApproach(observer, target) {
+    if (!(target.speed > 0) || !Number.isFinite(target.heading)) return null;
+    const look = lookAngles(observer, target);
+    const toObserver = bearing(target, observer);
+    const rx = look.groundRange * Math.sin(rad(toObserver));
+    const ry = look.groundRange * Math.cos(rad(toObserver));
+    const vx = target.speed * Math.sin(rad(target.heading));
+    const vy = target.speed * Math.cos(rad(target.heading));
+    const seconds = (rx * vx + ry * vy) / (vx * vx + vy * vy);
+    return {
+      seconds,
+      distance: Math.hypot(rx - vx * seconds, ry - vy * seconds),
+      approaching: seconds > 0,
+      currentDistance: look.groundRange,
+    };
+  }
+
+  /* --------------------------- recorded tracks --------------------------- */
+
+  /**
+   * Where a recorded object was at time `t` (epoch ms).
+   *
+   * Fixes arrive at whatever rate the source publishes, so a replay has to
+   * interpolate between them rather than snap to the nearest one — otherwise a
+   * satellite crawls in five-second jumps. Values that were measured (altitude,
+   * speed) and values that were computed at the time (azimuth, elevation,
+   * range) are all carried through, so a replay shows the same numbers the live
+   * readout showed at that moment.
+   *
+   * Outside the recorded window it clamps to the first or last fix and says so
+   * with `before` / `after`, so a caller never has to guess whether a position
+   * is real or an extrapolation.
+   */
+  function sampleTrack(points, t) {
+    if (!points || !points.length) return null;
+    const first = points[0], last = points[points.length - 1];
+    if (t <= first.t) return Object.assign({}, first, { at: first.t, before: t < first.t, after: false, gap: 0 });
+    if (t >= last.t) return Object.assign({}, last, { at: last.t, before: false, after: t > last.t, gap: 0 });
+
+    let lo = 0, hi = points.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid].t <= t) lo = mid; else hi = mid;
+    }
+    const a = points[lo], b = points[hi];
+    const span = b.t - a.t;
+    const f = span > 0 ? (t - a.t) / span : 0;
+    const between = (key) => (Number.isFinite(a[key]) && Number.isFinite(b[key]) ? lerp(a[key], b[key], f) : (a[key] ?? null));
+    return {
+      t,
+      at: t,
+      lat: lerp(a.lat, b.lat, f),
+      lng: lerpLongitude(a.lng, b.lng, f),
+      alt: between('alt'),
+      spd: between('spd'),
+      az: between('az'),
+      el: between('el'),
+      rng: between('rng'),
+      before: false,
+      after: false,
+      gap: span,                       // how far apart the two fixes were, in ms
+    };
+  }
+
+  /** Interpolate longitude the short way round, so a track can cross the date line. */
+  function lerpLongitude(a, b, f) {
+    let delta = b - a;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    return ((a + delta * f + 540) % 360) - 180;
+  }
+
+  /** Everything up to time `t`, for drawing the part of a trail already flown. */
+  function trackUpTo(points, t) {
+    if (!points || !points.length) return [];
+    const out = [];
+    for (const p of points) {
+      if (p.t > t) break;
+      out.push({ lat: p.lat, lng: p.lng, t: p.t });
+    }
+    const head = sampleTrack(points, t);
+    if (head && (!out.length || out[out.length - 1].t < head.at)) out.push({ lat: head.lat, lng: head.lng, t: head.at });
+    return out;
+  }
+
+  /**
+   * Evenly spaced time marks inside a recorded window — the labels that turn a
+   * line on the map back into a timetable. The step is chosen so a window of any
+   * length ends up with a readable handful rather than hundreds.
+   */
+  function timeMarks(points, opts) {
+    if (!points || points.length < 2) return [];
+    const o = opts || {};
+    const from = points[0].t, to = points[points.length - 1].t;
+    const wanted = o.count || 6;
+    const STEPS = [10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400];
+    const rough = (to - from) / 1000 / wanted;
+    const step = (STEPS.find((sec) => sec >= rough) || STEPS[STEPS.length - 1]) * 1000;
+    const marks = [];
+    // Start on a round multiple of the step so the labels land on tidy times.
+    for (let t = Math.ceil(from / step) * step; t <= to; t += step) {
+      const at = sampleTrack(points, t);
+      if (at) marks.push({ t, lat: at.lat, lng: at.lng });
+    }
+    return marks;
+  }
+
+  /* ------------------------------- an area ------------------------------- */
+
+  /**
+   * Convex hull of a set of points (Andrew's monotone chain), in lon/lat.
+   *
+   * Used to draw the ground the tracked set covers: your own position plus
+   * everything being followed. Planar rather than spherical, which is fine for
+   * a span that fits on one screen and wrong near a pole or across the date
+   * line — the caller gets what it asked for, and `spans` says how wide it is.
+   */
+  function convexHull(points) {
+    const pts = points
+      .filter((p) => Number.isFinite(lat(p)) && Number.isFinite(lng(p)))
+      .map((p) => ({ lat: lat(p), lng: lng(p) }))
+      .sort((a, b) => (a.lng - b.lng) || (a.lat - b.lat));
+    if (pts.length < 3) return pts;
+    const cross = (o, a, b) => (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
+    const half = (list) => {
+      const out = [];
+      for (const p of list) {
+        while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+        out.push(p);
+      }
+      return out;
+    };
+    const lower = half(pts), upper = half([...pts].reverse());
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+  }
+
+  /**
+   * Area of a polygon on the sphere, in square metres.
+   *
+   * The spherical excess of the shoelace sum on the unit sphere, so it stays
+   * right for a shape a thousand kilometres across, where a flat approximation
+   * would not.
+   */
+  function polygonArea(ring) {
+    if (!ring || ring.length < 3) return 0;
+    let total = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      total += (rad(lng(b)) - rad(lng(a))) * (2 + Math.sin(rad(lat(a))) + Math.sin(rad(lat(b))));
+    }
+    return Math.abs((total * R * R) / 2);
+  }
+
+  /** Centre of a set of points, averaged as vectors so it behaves at the seam. */
+  function centroid(points) {
+    let x = 0, y = 0, z = 0, n = 0;
+    for (const p of points) {
+      if (!Number.isFinite(lat(p)) || !Number.isFinite(lng(p))) continue;
+      const la = rad(lat(p)), lo = rad(lng(p));
+      x += Math.cos(la) * Math.cos(lo);
+      y += Math.cos(la) * Math.sin(lo);
+      z += Math.sin(la);
+      n++;
+    }
+    if (!n) return null;
+    return { lat: deg(Math.atan2(z / n, Math.hypot(x / n, y / n))), lng: deg(Math.atan2(y / n, x / n)) };
+  }
+
   /* ---------------------------- elevation ---------------------------- */
 
   /** Climb/descent/grade statistics from sampled elevations along a path. */
@@ -537,6 +848,10 @@
     hash32, rushFactor, trafficFactor, congestionBand,
     buildSchedule, distanceAtTime, speedAtTime, stateAt, encounters, arrivals,
     elevationStats, slopeAspect, compass,
+    toEcef, lookAngles, horizonRadius, horizonDistance,
+    sampleTrack, trackUpTo, timeMarks, lerpLongitude,
+    convexHull, polygonArea, centroid,
+    solarPosition, sunElevation, isSunlit, nakedEye, closestApproach,
     sunTimes, moonPhase,
     toDMS, toUTM, geohash,
     clock, dur, parseClock,

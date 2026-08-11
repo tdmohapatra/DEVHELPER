@@ -108,7 +108,7 @@
         const speed = pv.velocity
           ? Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) * 1000 : null;   // km/s → m/s
         items.push({
-          id: name,
+          id: name,                    // the element set's name; predictPass looks it up by this
           label: name,
           lat: sat.degreesLat(geo.latitude),
           lng: sat.degreesLong(geo.longitude),
@@ -120,6 +120,81 @@
       }
       return { items, note: `${SAT_GROUPS[group] || group}, ${satCache.recs.length} tracked` };
     },
+    // A satellite is a mirror: it has to be up, the sky has to be dark, and it
+    // has to still be in sunlight. All three, or there is nothing to see.
+    visibility: { needsDarkness: true, needsSunlight: true, minElevation: 10 },
+
+    /**
+     * When does this satellite next clear the horizon here, how high does it
+     * get, and will it be visible to the naked eye when it does?
+     *
+     * Coarse search then refine: step forward in minutes looking for the
+     * elevation to go positive, then in ten-second steps around that crossing.
+     * Propagation is local, so a day's search costs nothing but arithmetic.
+     */
+    predictPass(item, observer) {
+      const sat = satlib();
+      const entry = satCache.recs.find((r) => r.name === item.id || r.name === item.label);
+      if (!sat || !entry) return null;
+      const observerGd = {
+        latitude: Mx.rad(observer.lat),
+        longitude: Mx.rad(observer.lng),
+        height: (observer.altitude || 0) / 1000,        // satellite.js works in km
+      };
+      const elevationAt = (date) => {
+        const pv = sat.propagate(entry.rec, date);
+        if (!pv || !pv.position) return null;
+        const ecf = sat.eciToEcf(pv.position, sat.gstime(date));
+        return Mx.deg(sat.ecfToLookAngles(observerGd, ecf).elevation);
+      };
+
+      const MINUTES = 24 * 60;
+      const start = Date.now();
+      let previous = elevationAt(new Date(start));
+      if (previous === null) return null;
+      const wasUp = previous > 10;
+
+      for (let m = 1; m <= MINUTES; m++) {
+        const when = new Date(start + m * 60000);
+        const el = elevationAt(when);
+        if (el === null) continue;
+        const rising = previous <= 10 && el > 10;
+        previous = el;
+        if (!rising) continue;
+
+        // Refine the crossing, then walk the pass to its highest point.
+        let aos = when;
+        for (let sec = -60; sec <= 0; sec += 10) {
+          const t = new Date(when.valueOf() + sec * 1000);
+          if ((elevationAt(t) || -90) > 10) { aos = t; break; }
+        }
+        let peak = { el: -90, at: aos };
+        for (let sec = 0; sec <= 900; sec += 20) {
+          const t = new Date(aos.valueOf() + sec * 1000);
+          const e = elevationAt(t);
+          if (e === null) break;
+          if (e > peak.el) peak = { el: e, at: t };
+          if (e < 5 && sec > 60) break;
+        }
+        const pv = sat.propagate(entry.rec, peak.at);
+        const geo = pv && pv.position ? sat.eciToGeodetic(pv.position, sat.gstime(peak.at)) : null;
+        const sunlit = geo ? Mx.isSunlit({
+          lat: sat.degreesLat(geo.latitude), lng: sat.degreesLong(geo.longitude), altitude: geo.height * 1000,
+        }, peak.at) : null;
+        const darkHere = Mx.sunElevation(peak.at, observer.lat, observer.lng) < -6;
+        return {
+          aos: aos.toISOString(),
+          peakAt: peak.at.toISOString(),
+          maxElevation: peak.el,
+          sunlit,
+          dark: darkHere,
+          visible: sunlit === null ? null : (sunlit && darkHere),
+          wasUp,
+        };
+      }
+      return { aos: null, note: 'no pass above 10 degrees in the next 24 hours' };
+    },
+
     alert: {
       label: 'a satellite passes overhead',
       defaults: { maxKm: 400 },
@@ -141,6 +216,9 @@
     attribution: '<a href="https://airplanes.live">airplanes.live</a>',
     every: 20,
     needsBounds: true,
+    // Aircraft carry their own lights, so darkness and sunlight do not matter —
+    // but past about 30 km even a jet is a speck you will not pick out.
+    visibility: { needsDarkness: false, needsSunlight: false, minElevation: 3, maxRange: 30000 },
     async load(ctx) {
       // Not OpenSky: it answers with its own origin in Access-Control-Allow-Origin,
       // so a browser blocks the response. airplanes.live sends `*` and takes a
@@ -512,6 +590,7 @@
     label: 'Space launches',
     emoji: '🚀',
     hint: 'Launch Library 2, next 20 launches worldwide',
+    visibility: { needsDarkness: false, needsSunlight: false, minElevation: 0, maxRange: 60000 },
     attribution: '<a href="https://thespacedevs.com">The Space Devs</a>',
     every: 1800,
     async load(ctx) {

@@ -25,14 +25,18 @@ function makeLayer(kind: string, extra: Record<string, any> = {}) {
     getLatLngs() { return this._latlngs; },
     addLatLng(v: any) { this._latlngs.push(v); return this; },
     setLatLng(v: any) { this._latlng = v; return this; },
+    getLatLng() { return this._latlng; },
     setRadius(r: number) { this._radius = r; return this; },
     setStyle(s: any) { Object.assign(this._style, s); return this; },
     setOpacity() { return this; },
     setIcon() { return this; },
     bindPopup(p: any) { this._popup = p; return this; },
-    bindTooltip(t: any) { this._tooltip = t; return this; },
+    bindTooltip(t: any) { this._tooltip = t; this._tooltipContent = typeof t === "function" ? t() : t; return this; },
+    setTooltipContent(c: any) { this._tooltipContent = c; return this; },
+    getTooltipContent() { return this._tooltipContent; },
+    fire(event: string, payload?: any) { (this._events?.[event] || []).forEach((f: Function) => f(payload)); return this; },
     openPopup() { return this; },
-    on() { return this; },
+    on(event: string, fn: Function) { ((this._events ||= {})[event] ||= []).push(fn); return this; },
     off() { return this; },
     bringToFront() { return this; },
     ...extra,
@@ -74,6 +78,7 @@ const L: any = {
   marker: (ll: any, o: any) => makeLayer("marker", { _latlng: ll, _opts: o }),
   circle: (ll: any, o: any) => makeLayer("circle", { _latlng: ll, _opts: o, _radius: o?.radius }),
   circleMarker: (ll: any, o: any) => makeLayer("circleMarker", { _latlng: ll, _opts: o }),
+  polygon: (ll: any[], o: any) => makeLayer("polygon", { _latlngs: [...ll], _opts: o }),
   divIcon: (o: any) => ({ ...o }),
   layerGroup: (c: any[] = []) => makeLayer("layerGroup", { _children: [...c] }),
   tileLayer: (url: string, o: any) => makeLayer("tileLayer", { _url: url, _opts: o }),
@@ -517,29 +522,274 @@ describe("alerts", () => {
 });
 
 describe("tracking", () => {
-  it("follows an object, grows a trail and stops cleanly", async () => {
+  beforeEach(() => {
+    live().stopTracking();                       // no argument: stop them all
+    live().forgetAllTracks();                    // and start each test with no history
     live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+  });
+
+  it("tracks an object, recording a timestamped fix with look angles", async () => {
     await load("aircraft");
     const target = stateOf("aircraft").items[0];
-    live().startTracking("aircraft", target.id);
-    expect(live().state.tracked.itemId).toBe(target.id);
-    expect(live().state.tracked.trail.getLatLngs().length).toBe(1);
+    const track = live().startTracking("aircraft", target.id);
+    expect(live().tracks.size).toBe(1);
+    expect(track.label).toBe("AI101");
+    expect(track.points).toHaveLength(1);
 
-    await live().refresh("aircraft");
-    await vi.waitUntil(() => live().state.tracked.trail.getLatLngs().length > 1, { timeout: 5000 });
-    expect($("#smxTracked")!.textContent).toContain("AI101");
-
-    live().stopTracking();
-    expect(live().state.tracked).toBeNull();
-    expect($("#smxTracked")!.textContent).toContain("Nothing tracked");
+    const fix = track.points[0];
+    expect(fix.t).toBeGreaterThan(0);
+    expect(fix.lat).toBeCloseTo(12.99, 5);
+    expect(fix.alt).toBe(Math.round(4000 * 0.3048));
+    expect(fix.az).toBeGreaterThanOrEqual(0);
+    expect(fix.el).toBeTypeOf("number");
+    expect(fix.rng).toBeGreaterThan(0);
     await live().setLayer("aircraft", false);
   });
 
-  it("drops tracking when the layer it belongs to is switched off", async () => {
+  it("tracks several objects at once, each with its own colour and trail", async () => {
+    await load("aircraft");
+    const [a, b] = stateOf("aircraft").items;
+    live().startTracking("aircraft", a.id);
+    live().startTracking("aircraft", b.id);
+    expect(live().tracks.size).toBe(2);
+    const colours = [...live().tracks.values()].map((t: any) => t.color);
+    expect(new Set(colours).size).toBe(2);
+    expect([...live().tracks.values()].every((t: any) => t.trail._map === mapStub)).toBe(true);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("draws a sightline from my location to the object, and its footprint", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    const line = track.sightline.getLatLngs();
+    expect(line).toHaveLength(2);
+    expect(line[0]).toEqual([12.9716, 77.5946]);                 // my location
+    expect(line[1][0]).toBeCloseTo(12.99, 4);                    // the aircraft
+    // An airliner at 1.2 km is above the horizon for tens of kilometres around.
+    expect(track.footprint._radius).toBeGreaterThan(50000);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("says whether it can be seen right now, and why not when it cannot", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.view).toBeTruthy();
+    expect(track.view.range).toBeGreaterThan(0);
+    expect(track.view.eye.visible).toBeTypeOf("boolean");
+    if (!track.view.eye.visible) expect(track.view.eye.reasons.length).toBeGreaterThan(0);
+    expect($("#smxTracked")!.textContent).toMatch(/visible now|below the horizon|too far off|only \d+/);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("works out when to look: closest approach for something on a course", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.view.approach).toBeTruthy();
+    expect(track.view.approach.seconds).toBeTypeOf("number");
+    expect($("#smxTracked")!.textContent).toMatch(/Closest in|Already past|Look now/);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("predicts the next satellite pass, with peak elevation and whether it is visible", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2024-01-16T12:00:00Z"));
+    await load("satellites");
+    const iss = stateOf("satellites").items[0];
+    const track = live().startTracking("satellites", iss.id);
+    vi.useRealTimers();
+
+    expect(track.pass).toBeTruthy();
+    if (track.pass.aos) {
+      expect(new Date(track.pass.aos).valueOf()).toBeGreaterThan(new Date("2024-01-16T12:00:00Z").valueOf());
+      expect(track.pass.maxElevation).toBeGreaterThan(10);
+      expect(track.pass.sunlit).toBeTypeOf("boolean");
+      expect(track.pass.visible).toBeTypeOf("boolean");
+    } else {
+      expect(track.pass.note).toContain("no pass");
+    }
+    await live().setLayer("satellites", false);
+  });
+
+  it("never moves the map on its own — following is opt-in, per track", async () => {
+    await load("aircraft");
+    const [a, b] = stateOf("aircraft").items;
+    const first = live().startTracking("aircraft", a.id);
+    live().startTracking("aircraft", b.id);
+    expect(live().state.followKey).toBeNull();                   // the map stays where you left it
+
+    mapStub.panTo.mockClear();
+    live().updateTracks();
+    expect(mapStub.panTo).not.toHaveBeenCalled();
+
+    (document.querySelector(`[data-track-follow="${first.key}"]`) as HTMLButtonElement).click();
+    expect(live().state.followKey).toBe(first.key);
+    mapStub.panTo.mockClear();
+    live().updateTracks();
+    expect(mapStub.panTo).toHaveBeenCalled();                    // now, and only now, it follows
+
+    (document.querySelector(`[data-track-follow="${first.key}"]`) as HTMLButtonElement).click();
+    expect(live().state.followKey).toBeNull();
+    await live().setLayer("aircraft", false);
+  });
+
+  it("puts only the line on the map, and the rest on hover", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.trail._map).toBe(mapStub);                      // the line is always there
+    expect(track.sightline._map).toBeNull();                     // these are not
+    expect(track.footprint._map).toBeNull();
+
+    track.trail.fire("mouseover");
+    expect(track.hovering).toBe(true);
+    expect(track.sightline._map).toBe(mapStub);                  // sightline to my location
+    expect(track.footprint._map).toBe(mapStub);                  // and where it can be seen from
+    expect(track.marks.getLayers().length).toBeGreaterThanOrEqual(0);
+
+    track.trail.fire("mouseout");
+    expect(track.hovering).toBe(false);
+    expect(track.sightline._map).toBeNull();
+    expect(track.footprint._map).toBeNull();
+    await live().setLayer("aircraft", false);
+  });
+
+  it("hovering reads the fix nearest the pointer, with its time", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    track.points[0].t -= 60000;
+    track.points.push({ ...track.points[0], t: Date.now(), lat: 13.2, lng: 77.8 });
+
+    const early = live().hoverInfo(track, { lat: track.points[0].lat, lng: track.points[0].lng });
+    const late = live().hoverInfo(track, { lat: 13.2, lng: 77.8 });
+    expect(early).toContain("AI101");
+    expect(early).toContain(new Date(track.points[0].t).toLocaleTimeString());
+    expect(late).toContain(new Date(track.points[1].t).toLocaleTimeString());
+    expect(early).not.toBe(late);
+    expect(late).toContain("2 fixes");
+    await live().setLayer("aircraft", false);
+  });
+  it("appends to the trail over time, and never past its cap", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.points).toHaveLength(1);
+
+    // A fix inside the minimum gap is ignored; one after it is kept.
+    live().updateTracks();
+    expect(track.points).toHaveLength(1);
+    track.points[0].t -= 5000;
+    live().updateTracks();
+    expect(track.points).toHaveLength(2);
+    expect(track.trail.getLatLngs().length).toBe(2);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("saves the track with its timestamps, and restores it next time", async () => {
+    await load("aircraft");
+    const target = stateOf("aircraft").items[0];
+    const track = live().startTracking("aircraft", target.id);
+    track.points[0].t -= 5000;
+    live().updateTracks();
+
+    const saved = (kv.get("smx.tracks") as any)[track.key];
+    expect(saved.label).toBe("AI101");
+    expect(saved.itemId).toBe(target.id);
+    expect(saved.points.length).toBe(track.points.length);
+    expect(saved.points[0].t).toBeGreaterThan(0);
+    expect(new Date(saved.startedAt).valueOf()).toBeGreaterThan(0);
+
+    // Re-tracking the same object picks the saved history back up.
+    const count = track.points.length;
+    live().stopTracking(track.key);
+    const again = live().startTracking("aircraft", target.id);
+    expect(again.points.length).toBeGreaterThanOrEqual(count);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("exports the recorded track as GPX, CSV and JSON", async () => {
+    const downloads: { name: string; body: string }[] = [];
+    (globalThis as any).download = (name: string, body: string) => downloads.push({ name, body });
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    track.points[0].t -= 5000;
+    live().updateTracks();
+
+    live().exportTrack(track.key, "gpx");
+    live().exportTrack(track.key, "csv");
+    live().exportTrack(track.key, "json");
+    expect(downloads.map((d) => d.name.split(".").pop())).toEqual(["gpx", "csv", "json"]);
+    expect(downloads[0].body).toContain("<trkpt");
+    expect(downloads[0].body).toContain("<time>");
+    expect(downloads[1].body.split("\n")[0])
+      .toBe("time,lat,lon,altitude_m,speed_mps,azimuth_deg,elevation_deg,range_m");
+    expect(downloads[1].body).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    const parsed = JSON.parse(downloads[2].body);
+    expect(parsed.label).toBe("AI101");
+    expect(parsed.observer.label).toBe("Bengaluru");
+    expect(parsed.points.length).toBe(track.points.length);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("keeps a stopped track's history on disk until it is forgotten", async () => {
+    await load("aircraft");
+    const target = stateOf("aircraft").items[0];
+    const track = live().startTracking("aircraft", target.id);
+    track.points[0].t -= 5000;
+    live().updateTracks();
+    const recorded = track.points.length;
+    expect(recorded).toBeGreaterThan(1);
+
+    live().stopTracking(track.key);
+    expect((kv.get("smx.tracks") as any)[track.key].points).toHaveLength(recorded);
+
+    live().forgetTrack(track.key);
+    expect((kv.get("smx.tracks") as any)[track.key]).toBeUndefined();
+    expect(live().startTracking("aircraft", target.id).points).toHaveLength(1);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("stops one track without disturbing the others", async () => {
+    await load("aircraft");
+    const [a, b] = stateOf("aircraft").items;
+    const first = live().startTracking("aircraft", a.id);
+    live().startTracking("aircraft", b.id);
+    live().stopTracking(first.key);
+    expect(live().tracks.size).toBe(1);
+    expect(first.trail._map).toBeNull();
+    expect(live().state.followKey).not.toBe(first.key);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("drops the tracks belonging to a layer that is switched off", async () => {
     await load("aircraft");
     live().startTracking("aircraft", stateOf("aircraft").items[0].id);
     await live().setLayer("aircraft", false);
-    expect(live().state.tracked).toBeNull();
+    expect(live().tracks.size).toBe(0);
+    expect($("#smxTracked")!.textContent).toContain("Nothing tracked");
+  });
+
+  it("marks a fix as stale when the object leaves the feed", async () => {
+    await load("aircraft");
+    const target = stateOf("aircraft").items[0];
+    live().startTracking("aircraft", target.id);
+    expect($("#smxTracked")!.textContent).not.toContain("Not in the latest data");
+
+    // The next refresh no longer carries it.
+    stateOf("aircraft").items = stateOf("aircraft").items.filter((i: any) => i.id !== target.id);
+    live().updateTracks();
+    const text = $("#smxTracked")!.textContent!;
+    expect(text).toContain("Not in the latest data");
+    expect(text).toContain("last fix");
+    expect(text).toContain("Waiting for it to come back");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("still tracks without a location, just without look angles", async () => {
+    live().state.home = null;
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.view).toBeNull();
+    expect(track.points).toHaveLength(1);
+    expect($("#smxTracked")!.textContent).toContain("Set your location");
+    await live().setLayer("aircraft", false);
   });
 });
 
@@ -553,5 +803,220 @@ describe("persistence", () => {
     expect(saved.on).toContain("launches");
     expect(saved.alerts.launches).toBeTruthy();
     await live().setLayer("launches", false);
+  });
+});
+
+describe("replay", () => {
+  /** A track with a known ten-minute history, one fix a minute. */
+  async function recorded() {
+    live().stopTracking();
+    live().forgetAllTracks();
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    const t0 = Date.now() - 10 * 60000;
+    track.points = Array.from({ length: 11 }, (_, i) => ({
+      t: t0 + i * 60000,
+      lat: 12.9 + i * 0.01, lng: 77.5 + i * 0.01,
+      alt: 3000 + i * 100, spd: 200, az: 90, el: 10, rng: 100000 - i * 5000,
+    }));
+    track.trail.setLatLngs(track.points.map((p: any) => [p.lat, p.lng]));
+    return track;
+  }
+
+  it("spans exactly the recorded window", async () => {
+    const track = await recorded();
+    const w = live().replayWindow();
+    expect(w.from).toBe(track.points[0].t);
+    expect(w.to).toBe(track.points[10].t);
+  });
+
+  it("clips the line and places a ghost where it was at that moment", async () => {
+    const track = await recorded();
+    live().setReplay(true);
+    live().setReplayTime(track.points[0].t + 5 * 60000);          // half way
+
+    expect(track.ghost).toBeTruthy();
+    expect(track.ghost.getLatLng()[0]).toBeCloseTo(12.95, 4);     // the fix five minutes in
+    expect(track.trail.getLatLngs()).toHaveLength(6);             // and only what it had flown
+    live().setReplayTime(track.points[10].t);
+    expect(track.trail.getLatLngs()).toHaveLength(11);
+    live().setReplay(false);
+    expect(track.ghost).toBeNull();
+    expect(track.trail.getLatLngs()).toHaveLength(11);            // the whole line comes back
+  });
+
+  it("interpolates between fixes rather than jumping between them", async () => {
+    const track = await recorded();
+    const midway = track.points[0].t + 90000;                     // 30 s past the second fix
+    const at = SMX().Mx.sampleTrack(track.points, midway);
+    expect(at.lat).toBeCloseTo(12.915, 4);
+    expect(at.alt).toBeCloseTo(3150, 0);
+    expect(at.rng).toBeCloseTo(92500, 0);
+  });
+
+  it("plays forward at the chosen speed and stops at the end", async () => {
+    const track = await recorded();
+    live().setReplay(true);
+    live().setReplayTime(track.points[0].t);
+    live().state.replay.rate = 1800;                              // 30 minutes a second
+    live().playReplay();
+    expect(live().state.replay.playing).toBe(true);
+    await vi.waitUntil(() => !live().state.replay.playing, { timeout: 10000 });
+    expect(live().state.replay.t).toBe(live().state.replay.to);
+    live().setReplay(false);
+  });
+
+  it("scrubbing with the slider moves the replay and pauses playback", async () => {
+    const track = await recorded();
+    live().setReplay(true);
+    live().playReplay();
+    const slider = $("#smxReplaySlider") as HTMLInputElement;
+    expect(slider).toBeTruthy();
+    // Drive it through its own range, the way a pointer does.
+    const target = Math.round((Number(slider.min) + Number(slider.max)) / 2);
+    slider.value = String(target);
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(live().state.replay.playing).toBe(false);          // scrubbing takes over from playback
+    expect(Math.round(live().state.replay.t / 1000)).toBe(Number(slider.value));
+    expect(live().state.replay.t).toBeGreaterThanOrEqual(track.points[0].t);
+    expect(live().state.replay.t).toBeLessThanOrEqual(track.points[10].t);
+    live().setReplay(false);
+  });
+
+  it("refuses to replay when nothing has been recorded", async () => {
+    live().setReplay(false);
+    live().stopTracking();
+    live().forgetAllTracks();
+    toasts.length = 0;
+    live().setReplay(true);
+    expect(live().state.replay.on).toBe(false);
+    expect(toasts.pop()).toContain("Nothing recorded yet");
+    expect($("#smxReplay")!.textContent).toContain("Track something");
+  });
+
+  it("labels time marks along the line so the map reads like a timetable", async () => {
+    const track = await recorded();
+    const marks = SMX().Mx.timeMarks(track.points, { count: 6 });
+    expect(marks.length).toBeGreaterThan(2);
+    expect(marks.length).toBeLessThanOrEqual(8);
+    for (const m of marks) {
+      expect(m.t).toBeGreaterThanOrEqual(track.points[0].t);
+      expect(m.t).toBeLessThanOrEqual(track.points[10].t);
+    }
+    track.trail.fire("mouseover");
+    expect(track.marks.getLayers().length).toBe(marks.length);
+    track.trail.fire("mouseout");
+  });
+});
+
+describe("a live GPS fix", () => {
+  /** Turn the app's own GPS on, the way its tracking code does. */
+  function gpsOn(lat: number, lng: number, accuracy = 12) {
+    appState.gpsOn = true;
+    appState.lastFix = { lat, lng, accuracy };
+  }
+  function gpsOff() {
+    appState.gpsOn = false;
+    appState.lastFix = null;
+  }
+
+  beforeEach(() => {
+    live().setReplay(false);
+    live().stopTracking();
+    live().forgetAllTracks();
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Saved location");
+    gpsOff();
+  });
+
+  it("prefers the live fix over the saved location for every distance", async () => {
+    expect(live().observerPoint().label).toBe("Saved location");
+    gpsOn(13.2, 77.8);
+    expect(live().observerPoint().label).toBe("GPS");
+    expect(live().gpsFix().accuracy).toBe(12);
+
+    // Distances are now measured from the fix, not the saved point.
+    const item = { lat: 13.2, lng: 77.8 };
+    expect(live().distanceToHome(item)).toBeLessThan(100);
+    gpsOff();
+    expect(live().distanceToHome(item)).toBeGreaterThan(10000);
+  });
+
+  it("draws a line from the fix to each tracked object", async () => {
+    gpsOn(12.9716, 77.5946);
+    await load("aircraft");
+    const [a, b] = stateOf("aircraft").items;
+    live().startTracking("aircraft", a.id);
+    live().startTracking("aircraft", b.id);
+    live().drawGpsLines();
+
+    const lines = live().state.gpsLayer.getLayers().filter((l: any) => l.kind === "polyline");
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line._latlngs[0]).toEqual([12.9716, 77.5946]);      // starts at the fix
+      expect(line._tooltipContent).toContain("from your GPS fix");
+    }
+    await live().setLayer("aircraft", false);
+  });
+
+  it("outlines the area you and the tracked objects span, and reports it", async () => {
+    gpsOn(12.9716, 77.5946);
+    await load("aircraft");
+    stateOf("aircraft").items.forEach((i: any) => live().startTracking("aircraft", i.id));
+    live().drawGpsLines();
+
+    const polygon = live().state.gpsLayer.getLayers().find((l: any) => l.kind === "polygon");
+    expect(polygon).toBeTruthy();
+    expect(polygon._latlngs.length).toBeGreaterThanOrEqual(3);
+    expect(live().state.coverage.area).toBeGreaterThan(0);
+    expect(polygon._tooltipContent).toContain("km²");
+    expect($("#smxHome")!.textContent).toContain("live GPS fix in use");
+    expect($("#smxHome")!.textContent).toContain("Together you span");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("needs two objects before there is an area to draw", async () => {
+    gpsOn(12.9716, 77.5946);
+    await load("aircraft");
+    live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    live().drawGpsLines();
+    expect(live().state.gpsLayer.getLayers().some((l: any) => l.kind === "polygon")).toBe(false);
+    expect(live().state.coverage).toBeNull();
+    await live().setLayer("aircraft", false);
+  });
+
+  it("draws nothing from a fix that is not there, or when switched off", async () => {
+    await load("aircraft");
+    stateOf("aircraft").items.forEach((i: any) => live().startTracking("aircraft", i.id));
+    live().drawGpsLines();
+    expect(live().state.gpsLayer.getLayers()).toHaveLength(0);   // no fix
+
+    gpsOn(12.9716, 77.5946);
+    live().state.gpsLines = false;
+    live().drawGpsLines();
+    expect(live().state.gpsLayer.getLayers()).toHaveLength(0);   // switched off
+    live().state.gpsLines = true;
+    live().drawGpsLines();
+    expect(live().state.gpsLayer.getLayers().length).toBeGreaterThan(0);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("moves the lines with the replay, so the area matches the moment", async () => {
+    gpsOn(12.9716, 77.5946);
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    live().startTracking("aircraft", stateOf("aircraft").items[1].id);
+    const t0 = Date.now() - 5 * 60000;
+    track.points = Array.from({ length: 6 }, (_, i) => ({
+      t: t0 + i * 60000, lat: 12.5 + i * 0.1, lng: 77.2 + i * 0.1, alt: 3000, spd: 200, az: 90, el: 10, rng: 50000,
+    }));
+    live().setReplay(true);
+    live().setReplayTime(t0);
+    const early = live().state.gpsLayer.getLayers().find((l: any) => l.kind === "polyline")._latlngs[1];
+    live().setReplayTime(t0 + 5 * 60000);
+    const late = live().state.gpsLayer.getLayers().find((l: any) => l.kind === "polyline")._latlngs[1];
+    expect(early).not.toEqual(late);
+    live().setReplay(false);
+    await live().setLayer("aircraft", false);
   });
 });

@@ -374,3 +374,213 @@ describe("clock formatting", () => {
     expect(M.parseClock("25:00")).toBeNull();
   });
 });
+
+describe("observer geometry", () => {
+  const home = { lat: 12.9716, lng: 77.5946, altitude: 920 };
+
+  it("puts something directly overhead at 90 degrees elevation", () => {
+    const look = M.lookAngles(home, { lat: 12.9716, lng: 77.5946, altitude: 420920 });
+    expect(look.elevation).toBeCloseTo(90, 4);
+    expect(look.range).toBeCloseTo(420000, -1);
+    expect(look.groundRange).toBeCloseTo(0, 3);
+  });
+
+  it("reads azimuth as a compass bearing", () => {
+    expect(M.lookAngles(home, { lat: 13.5, lng: 77.5946, altitude: 920 }).azimuth).toBeCloseTo(0, 1);
+    expect(M.lookAngles(home, { lat: 12.9716, lng: 78.2, altitude: 920 }).azimuth).toBeCloseTo(90, 0);
+    expect(M.lookAngles(home, { lat: 12.4, lng: 77.5946, altitude: 920 }).azimuth).toBeCloseTo(180, 1);
+    expect(M.compass(M.lookAngles(home, { lat: 12.9716, lng: 77.0, altitude: 920 }).azimuth)).toBe("W");
+  });
+
+  it("drops below the horizon for a distant object at the same height", () => {
+    const look = M.lookAngles(home, { lat: 15.5, lng: 77.5946, altitude: 920 });
+    expect(look.elevation).toBeLessThan(0);
+    expect(M.nakedEye({ elevation: look.elevation, sunElevation: -20, sunlit: true }).reasons[0])
+      .toBe("below the horizon");
+  });
+
+  it("still sees a high satellite hundreds of kilometres away", () => {
+    // The ISS at 420 km, 800 km along the ground: above the horizon, but low.
+    const away = M.destination(home, 45, 800000);
+    const look = M.lookAngles(home, { ...away, altitude: 420000 });
+    expect(look.elevation).toBeGreaterThan(0);
+    expect(look.elevation).toBeLessThan(30);
+    expect(look.range / 1000).toBeGreaterThan(800);
+  });
+
+  it("sizes the footprint an object can be seen from", () => {
+    expect(M.horizonRadius(420000) / 1000).toBeCloseTo(2222, -2);   // ISS, ~2200 km
+    expect(M.horizonRadius(11000) / 1000).toBeCloseTo(374, -1);     // airliner
+    expect(M.horizonRadius(0)).toBe(0);
+  });
+
+  it("knows how far a standing observer can see", () => {
+    expect(M.horizonDistance(1.7) / 1000).toBeCloseTo(4.7, 1);
+    expect(M.horizonDistance(100) / 1000).toBeCloseTo(35.7, 1);
+  });
+});
+
+describe("the sun", () => {
+  it("puts the subsolar point on the tropic at the June solstice", () => {
+    const sun = M.solarPosition(new Date("2026-06-21T12:00:00Z"));
+    expect(sun.declination).toBeCloseTo(23.4, 0);
+    expect(Math.abs(sun.subsolarLat)).toBeCloseTo(23.4, 0);
+  });
+
+  it("crosses the equator at the equinoxes", () => {
+    expect(Math.abs(M.solarPosition(new Date("2026-03-20T12:00:00Z")).declination)).toBeLessThan(1);
+    expect(Math.abs(M.solarPosition(new Date("2026-09-22T12:00:00Z")).declination)).toBeLessThan(1);
+  });
+
+  it("is high at local noon and below the horizon at local midnight", () => {
+    // 77.6 E is UTC+5:10 of solar time, so local noon is about 06:50 UTC.
+    expect(M.sunElevation(new Date("2026-06-21T06:50:00Z"), 12.9716, 77.5946)).toBeGreaterThan(75);
+    expect(M.sunElevation(new Date("2026-06-21T18:50:00Z"), 12.9716, 77.5946)).toBeLessThan(-20);
+  });
+
+  it("agrees with the sunrise and sunset computed the other way", () => {
+    const t = M.sunTimes(new Date("2026-08-11T00:00:00Z"), 12.9716, 77.5946);
+    const el = (d: Date) => M.sunElevation(d, 12.9716, 77.5946);
+    // sunTimes crosses at -0.833°, the standard allowance for refraction and the
+    // sun's own radius — so at its sunrise the disc is just under the horizon.
+    for (const moment of [t.sunrise, t.sunset]) {
+      expect(el(moment)).toBeLessThan(0);
+      expect(el(moment)).toBeGreaterThan(-2);
+    }
+    // And the two agree on the middle of the day to within a couple of minutes.
+    let best = { el: -99, at: t.solarNoon };
+    for (let m = -20; m <= 20; m++) {
+      const d = new Date(t.solarNoon.valueOf() + m * 60000);
+      if (el(d) > best.el) best = { el: el(d), at: d };
+    }
+    expect(Math.abs(best.at.valueOf() - t.solarNoon.valueOf())).toBeLessThan(3 * 60000);
+    // Peak elevation is 90° minus how far the subsolar latitude sits from yours.
+    const dec = M.solarPosition(best.at).declination;
+    expect(best.el).toBeCloseTo(90 - Math.abs(12.9716 - dec), 1);
+  });
+
+  it("keeps the midnight sun above the horizon inside the Arctic circle", () => {
+    const el = M.sunElevation(new Date("2026-06-21T00:00:00Z"), 78.2, 15.6);
+    expect(el).toBeGreaterThan(0);
+  });
+});
+
+describe("sunlight and visibility", () => {
+  const june = new Date("2026-06-21T06:50:00Z");      // noon over India
+
+  it("calls the day side sunlit whatever the altitude", () => {
+    expect(M.isSunlit({ lat: 12.97, lng: 77.59, altitude: 0 }, june)).toBe(true);
+    expect(M.isSunlit({ lat: 12.97, lng: 77.59, altitude: 420000 }, june)).toBe(true);
+  });
+
+  it("puts the ground on the night side in shadow, but a high satellite in light", () => {
+    const midnight = new Date("2026-06-21T18:50:00Z");
+    expect(M.isSunlit({ lat: 12.97, lng: 77.59, altitude: 0 }, midnight)).toBe(false);
+    // Deep in the night side even orbit is dark; near the terminator it is lit.
+    const terminator = M.destination({ lat: 12.97, lng: 77.59 }, 270, 2000000);
+    expect(M.isSunlit({ ...terminator, altitude: 1200000 }, new Date("2026-06-21T13:30:00Z"))).toBe(true);
+  });
+
+  it("needs height, darkness and sunlight together for a naked-eye pass", () => {
+    const good = M.nakedEye({ elevation: 45, sunElevation: -12, sunlit: true });
+    expect(good.visible).toBe(true);
+    expect(good.reasons).toHaveLength(0);
+
+    expect(M.nakedEye({ elevation: 45, sunElevation: 20, sunlit: true }).reasons).toContain("broad daylight");
+    expect(M.nakedEye({ elevation: 45, sunElevation: -12, sunlit: false }).reasons[0]).toContain("shadow");
+    expect(M.nakedEye({ elevation: 4, sunElevation: -12, sunlit: true }).reasons[0]).toContain("4° above");
+  });
+
+  it("ignores darkness and sunlight for things that carry their own lights", () => {
+    const plane = M.nakedEye({
+      elevation: 30, sunElevation: 40, sunlit: false,
+      needsDarkness: false, needsSunlight: false, range: 8000, maxRange: 20000,
+    });
+    expect(plane.visible).toBe(true);
+    expect(M.nakedEye({
+      elevation: 30, sunElevation: 40, needsDarkness: false, needsSunlight: false,
+      range: 60000, maxRange: 20000,
+    }).reasons[0]).toContain("too far off");
+  });
+});
+
+describe("closest approach", () => {
+  const home = { lat: 12.9716, lng: 77.5946, altitude: 920 };
+
+  it("finds when something heading straight at you arrives, and that it passes overhead", () => {
+    const south = M.destination(home, 180, 10000);        // 10 km south of home
+    const ca = M.closestApproach(home, { ...south, altitude: 3000, speed: 100, heading: 0 });
+    expect(ca.seconds).toBeCloseTo(100, 0);               // 10 km at 100 m/s
+    expect(ca.distance).toBeLessThan(50);                 // essentially straight over
+    expect(ca.approaching).toBe(true);
+  });
+
+  it("reports the miss distance of something crossing to one side", () => {
+    const west = M.destination(home, 270, 20000);
+    const offset = M.destination(west, 0, 5000);          // 5 km north of the line
+    const ca = M.closestApproach(home, { ...offset, altitude: 3000, speed: 200, heading: 90 });
+    expect(ca.distance / 1000).toBeCloseTo(5, 0);
+    expect(ca.seconds).toBeCloseTo(100, 0);
+  });
+
+  it("goes negative once the closest point is behind it", () => {
+    const north = M.destination(home, 0, 10000);
+    const ca = M.closestApproach(home, { ...north, altitude: 3000, speed: 100, heading: 0 });
+    expect(ca.seconds).toBeLessThan(0);
+    expect(ca.approaching).toBe(false);
+  });
+
+  it("returns nothing when there is no course to extrapolate", () => {
+    expect(M.closestApproach(home, { lat: 13, lng: 77.6, speed: 0, heading: 90 })).toBeNull();
+    expect(M.closestApproach(home, { lat: 13, lng: 77.6, speed: 100 })).toBeNull();
+  });
+});
+
+describe("hulls and areas", () => {
+  it("wraps a scatter of points in their convex hull, dropping the interior ones", () => {
+    const square = [
+      { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, { lat: 1, lng: 1 }, { lat: 1, lng: 0 },
+      { lat: 0.5, lng: 0.5 },                                  // inside, must be dropped
+    ];
+    const hull = M.convexHull(square);
+    expect(hull).toHaveLength(4);
+    expect(hull.some((p: any) => p.lat === 0.5)).toBe(false);
+  });
+
+  it("hands back fewer than three points unchanged, since they have no area", () => {
+    expect(M.convexHull([{ lat: 1, lng: 1 }])).toHaveLength(1);
+    expect(M.convexHull([{ lat: 1, lng: 1 }, { lat: 2, lng: 2 }])).toHaveLength(2);
+    expect(M.polygonArea([{ lat: 1, lng: 1 }, { lat: 2, lng: 2 }])).toBe(0);
+  });
+
+  it("ignores points with no position", () => {
+    const hull = M.convexHull([
+      { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, { lat: 1, lng: 1 },
+      { lat: null, lng: 5 }, { lat: 2, lng: undefined },
+    ]);
+    expect(hull).toHaveLength(3);
+  });
+
+  it("measures a one-degree square at the equator at about 12,300 km²", () => {
+    const area = M.polygonArea([
+      { lat: 0, lng: 0 }, { lat: 0, lng: 1 }, { lat: 1, lng: 1 }, { lat: 1, lng: 0 },
+    ]);
+    expect(area / 1e6).toBeCloseTo(12363, -2);
+  });
+
+  it("shrinks the same square towards the pole, as a sphere requires", () => {
+    const box = (lat0: number) => M.polygonArea([
+      { lat: lat0, lng: 0 }, { lat: lat0, lng: 1 }, { lat: lat0 + 1, lng: 1 }, { lat: lat0 + 1, lng: 0 },
+    ]);
+    expect(box(60)).toBeLessThan(box(0) * 0.6);
+    expect(box(0)).toBeGreaterThan(box(30));
+  });
+
+  it("averages a centre as vectors, so it survives the date line", () => {
+    const c = M.centroid([{ lat: 10, lng: 179 }, { lat: 10, lng: -179 }]);
+    expect(Math.abs(c.lng)).toBeGreaterThan(179);        // near 180, not near 0
+    // The vector mean of two points 2° apart sits a shade poleward of them both.
+    expect(c.lat).toBeCloseTo(10, 2);
+    expect(M.centroid([])).toBeNull();
+  });
+});

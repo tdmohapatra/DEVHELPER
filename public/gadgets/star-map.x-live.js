@@ -42,9 +42,22 @@
     autoRefresh: true,
     alerts: [],                 // newest first
     alerted: new Set(),         // dedupe key per fired alert
-    tracked: null,              // { layerId, itemId, trail: L.polyline }
+    tracks: new Map(),          // key -> track record; several at once
+    followKey: null,            // camera follow is opt-in, per track, never automatic
+    replay: {
+      on: false, t: 0, from: 0, to: 0, playing: false, rate: 60, frame: null, last: 0,
+    },
+    eyeHeight: 1.7,             // observer height, for horizon and look angles
+    gpsLines: true,             // draw a line from a live GPS fix to each tracked object
+    gpsLayer: null,             // those lines, plus the area they span
+    coverage: null,
     muted: false,
   };
+
+  const TRACK_STORE = 'smx.tracks';
+  const TRACK_COLORS = ['#ec4899', '#f472b6', '#c026d3', '#e879f9', '#db2777'];
+  const MAX_POINTS = 1200;      // per track, about an hour of 3 s satellite fixes
+  const MIN_POINT_GAP_MS = 2000;
 
   /* ------------------------------ panes ------------------------------ */
 
@@ -69,7 +82,30 @@
     return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
   };
 
-  const distanceToHome = (item) => (live.home && Number.isFinite(item.lat) ? Mx.haversine(live.home, item) : null);
+  const distanceToHome = (item) => {
+    const from = observerPoint();
+    return from && Number.isFinite(item.lat) ? Mx.haversine(from, item) : null;
+  };
+
+  /**
+   * Where "I" am. A live GPS fix wins over the saved location, because if the
+   * app is tracking your position that is the truer answer — and it is what the
+   * GPS lines and the covered area are drawn from.
+   */
+  function observerPoint() {
+    if (gpsFix()) return gpsFix();
+    return live.home;
+  }
+
+  /** The app's own GPS fix, when it has one. */
+  function gpsFix() {
+    if (typeof S === 'undefined' || !S.gpsOn || !S.lastFix) return null;
+    const f = S.lastFix;
+    const lat = f.lat !== undefined ? f.lat : (f.latlng && f.latlng.lat);
+    const lng = f.lng !== undefined ? f.lng : (f.latlng && f.latlng.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng, label: 'GPS', accuracy: f.accuracy, live: true };
+  }
 
   /**
    * A dot for anything on a live layer. Emoji rather than drawn icons: each
@@ -156,7 +192,9 @@
       st.group.clearLayers().remove();
       if (st.raster) { st.raster.remove(); st.raster = null; }
       st.items = [];
-      if (live.tracked && live.tracked.layerId === id) stopTracking();
+      for (const track of [...live.tracks.values()]) {
+        if (track.layerId === id) stopTracking(track.key);
+      }
     }
     save();
     renderPanel();
@@ -203,7 +241,11 @@
       st.group.clearLayers();
       (layer.draw || defaultDraw)(st.items, ctx);
       evaluateAlerts(id);
-      if (live.tracked && live.tracked.layerId === id) followTracked();
+      for (const track of live.tracks.values()) {
+        if (track.layerId === id) updateTrack(track);
+      }
+      drawGpsLines();
+      renderTrackedReadout();
     } catch (err) {
       st.error = err && err.message ? err.message : String(err);
     } finally {
@@ -220,7 +262,7 @@
       layer, state: st, group: st.group, map, home: live.home,
       radiusKm: live.radiusKm, bounds: boundsBox(), json: X.json,
       icon: (item, tracked) => liveIcon(layer, item, tracked),
-      isTracked: (item) => !!(live.tracked && live.tracked.layerId === layer.id && live.tracked.itemId === item.id),
+      isTracked: (item) => isTracking(layer.id, item.id),
       onClick: (item) => (e) => { if (e && e.target && e.target.openPopup) e.target.openPopup(); select(layer.id, item.id); },
     };
   }
@@ -245,7 +287,7 @@
       ${d !== null ? `<div style="margin-top:4px">${km(d)} from ${X.esc(live.home.label)}</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:6px">
         <button class="btn" data-smx-track="${X.esc(layer.id)}|${X.esc(String(item.id))}">
-          ${live.tracked && live.tracked.itemId === item.id ? 'Stop tracking' : 'Track'}
+          ${isTracking(layer.id, item.id) ? 'Stop tracking' : 'Track'}
         </button>
       </div>`;
   }
@@ -254,7 +296,7 @@
     const btn = document.querySelector(`[data-smx-track="${layer.id}|${item.id}"]`);
     if (!btn) return;
     btn.addEventListener('click', () => {
-      if (live.tracked && live.tracked.itemId === item.id) stopTracking();
+      if (isTracking(layer.id, item.id)) stopTracking(trackKey(layer.id, item.id));
       else startTracking(layer.id, item.id);
       map.closePopup();
     });
@@ -262,42 +304,504 @@
 
   /* ------------------------------ tracking ------------------------------ */
 
+  const trackKey = (layerId, itemId) => `${layerId}:${itemId}`;
+
+  /**
+   * Start following an object. Several can be tracked at once; the camera
+   * follows at most one of them, and following is optional — the map can stay
+   * where you put it while the tracks keep updating.
+   *
+   * A track that was followed before keeps its saved history: the points are
+   * stored with their timestamps, so closing the tool and coming back leaves the
+   * trail intact rather than starting from a blank map.
+   */
   function startTracking(layerId, itemId) {
-    stopTracking();
-    live.tracked = {
-      layerId, itemId,
+    const key = trackKey(layerId, itemId);
+    if (live.tracks.has(key)) return live.tracks.get(key);
+    const layer = live.layers.find((l) => l.id === layerId);
+    const item = (live.state[layerId] || { items: [] }).items.find((i) => String(i.id) === String(itemId));
+    const color = TRACK_COLORS[live.tracks.size % TRACK_COLORS.length];
+
+    const track = {
+      key, layerId, itemId,
+      label: (item && item.label) || String(itemId),
+      emoji: (item && item.glyph) || (layer && layer.emoji) || '📍',
+      color,
+      points: (savedTracks[key] && savedTracks[key].points) || [],
+      startedAt: (savedTracks[key] && savedTracks[key].startedAt) || Date.now(),
+      // The line is the only thing permanently on the map. Everything else —
+      // the sightline to your location, the footprint it can be seen from —
+      // appears while the pointer is on the line, and leaves with it.
       trail: L.polyline([], {
-        pane: 'smx-live-raster', color: X.ANNOTATION, weight: 2, opacity: 0.9, dashArray: '4 4',
+        pane: 'smx-live', color, weight: 3, opacity: 0.95,
+        interactive: true, bubblingMouseEvents: false,
       }).addTo(map),
+      sightline: L.polyline([], {
+        pane: 'smx-live-raster', color, weight: 1.5, opacity: 0.85, dashArray: '2 6', interactive: false,
+      }),
+      footprint: L.circle([0, 0], {
+        pane: 'smx-live-raster', radius: 0, color, weight: 1, opacity: 0.5,
+        fillColor: color, fillOpacity: 0.04, interactive: false,
+      }),
+      marks: L.layerGroup([], { pane: 'smx-live-raster' }),
+      hovering: false,
+      view: null,               // the geometry of the latest fix
+      pass: null,               // when it can next be seen, if the layer knows
     };
-    const item = currentTracked();
-    X.notify(item ? `Tracking ${item.label}.` : 'Tracking.', 'ok', 2200);
-    followTracked();
+    track.trail.setLatLngs(track.points.map((pt) => [pt.lat, pt.lng]));
+    bindTrackHover(track);
+    live.tracks.set(key, track);
+    X.notify(`Tracking ${track.label}. The map stays where it is — hover the line for its numbers.`, 'ok', 3000);
+    updateTrack(track);
+    drawGpsLines();
+    renderPanel();
+    return track;
+  }
+
+  /**
+   * Hovering the line is how you read a track: the pointer picks the nearest
+   * recorded fix, the tooltip gives its time and what was true then, and the
+   * sightline and footprint appear for as long as you are looking.
+   */
+  function bindTrackHover(track) {
+    const show = () => {
+      track.hovering = true;
+      if (observerPoint()) track.sightline.addTo(map);
+      if (track.view && track.view.footprint > 0) track.footprint.addTo(map);
+      track.marks.addTo(map);
+      drawTimeMarks(track);
+    };
+    const hide = () => {
+      track.hovering = false;
+      track.sightline.remove();
+      track.footprint.remove();
+      track.marks.remove();
+    };
+    track.trail.on('mouseover', show);
+    track.trail.on('mouseout', hide);
+    track.trail.on('mousemove', (e) => {
+      track.trail.setTooltipContent(hoverInfo(track, e.latlng));
+    });
+    track.trail.bindTooltip(() => hoverInfo(track, null), { sticky: true, direction: 'top' });
+    track._hideHover = hide;
+  }
+
+  /** What was true at the recorded fix nearest the pointer. */
+  function hoverInfo(track, latlng) {
+    if (!track.points.length) return X.esc(track.label);
+    let fix = track.points[track.points.length - 1];
+    if (latlng) {
+      let best = Infinity;
+      for (const p of track.points) {
+        const d = Mx.haversine(latlng, p);
+        if (d < best) { best = d; fix = p; }
+      }
+    }
+    const when = new Date(fix.t);
+    return `<b>${track.emoji} ${X.esc(track.label)}</b>`
+      + `<br>${when.toLocaleTimeString()} · ${fix.lat.toFixed(4)}, ${fix.lng.toFixed(4)}`
+      + `${fix.alt !== null && fix.alt !== undefined ? `<br>${(fix.alt / 1000).toFixed(fix.alt > 10000 ? 0 : 1)} km up` : ''}`
+      + `${fix.spd ? ` · ${Math.round(fix.spd * 3.6)} km/h` : ''}`
+      + `${fix.rng ? `<br>${km(fix.rng)} from you, ${Mx.compass(fix.az)} at ${Math.round(fix.el)}°` : ''}`
+      + `<br><small>${track.points.length} fixes · hover the line to read any moment</small>`;
+  }
+
+  /** Time labels along the recorded line: a map that reads like a timetable. */
+  function drawTimeMarks(track) {
+    track.marks.clearLayers();
+    for (const mark of Mx.timeMarks(track.points, { count: 6 })) {
+      L.marker([mark.lat, mark.lng], {
+        pane: 'smx-live-raster', interactive: false,
+        icon: L.divIcon({
+          className: 'smx-timemark', iconSize: [46, 14], iconAnchor: [23, 7],
+          html: `<span>${Mx.clock(secondsOfDay(mark.t))}</span>`,
+        }),
+      }).addTo(track.marks);
+    }
+  }
+
+  function stopTracking(key) {
+    if (key === undefined) {                       // stop all of them
+      for (const k of [...live.tracks.keys()]) stopTracking(k);
+      return;
+    }
+    const track = live.tracks.get(key);
+    if (!track) return;
+    // Keep what was recorded: stopping means "stop following", not "throw the
+    // history away". Forgetting it is a separate, deliberate act.
+    savedTracks[key] = {
+      layerId: track.layerId, itemId: track.itemId, label: track.label,
+      startedAt: track.startedAt, points: track.points,
+    };
+    track.trail.remove();
+    track.sightline.remove();
+    track.footprint.remove();
+    track.marks.remove();
+    if (track.ghost) track.ghost.remove();
+    live.tracks.delete(key);
+    drawGpsLines();
+    if (live.followKey === key) live.followKey = live.tracks.size ? [...live.tracks.keys()][0] : null;
+    saveTracks();
     renderPanel();
   }
 
-  function stopTracking() {
-    if (live.tracked && live.tracked.trail) live.tracked.trail.remove();
-    live.tracked = null;
-    renderPanel();
-  }
+  const isTracking = (layerId, itemId) => live.tracks.has(trackKey(layerId, itemId));
 
-  const currentTracked = () => {
-    if (!live.tracked) return null;
-    const st = live.state[live.tracked.layerId];
-    return st ? st.items.find((i) => String(i.id) === String(live.tracked.itemId)) || null : null;
+  /** The current fix for a track, from whatever its layer last loaded. */
+  const trackedItem = (track) => {
+    const st = live.state[track.layerId];
+    return st ? st.items.find((i) => String(i.id) === String(track.itemId)) || null : null;
   };
 
-  /** Keep the camera on the tracked object and extend its trail. */
-  function followTracked() {
-    const item = currentTracked();
+  /**
+   * Bring one track up to date: append a timestamped point, redraw the trail,
+   * the sightline to your location and the footprint, and work out whether it
+   * can be seen and when.
+   */
+  function updateTrack(track) {
+    const item = trackedItem(track);
     if (!item || !Number.isFinite(item.lat)) return;
+    const now = Date.now();
     const at = [item.lat, item.lng];
-    live.tracked.trail.addLatLng(at);
-    const pts = live.tracked.trail.getLatLngs();
-    if (pts.length > 400) live.tracked.trail.setLatLngs(pts.slice(-400));
-    if (live.followCamera !== false) map.panTo(at, { animate: false });
+
+    const from = observerPoint();
+    const observer = from
+      ? { lat: from.lat, lng: from.lng, altitude: live.eyeHeight }
+      : null;
+    const target = { lat: item.lat, lng: item.lng, altitude: item.altitude || 0 };
+    const layer = live.layers.find((l) => l.id === track.layerId);
+
+    let view = null;
+    if (observer) {
+      const look = Mx.lookAngles(observer, target);
+      const sunEl = Mx.sunElevation(new Date(now), observer.lat, observer.lng);
+      const sunlit = item.altitude ? Mx.isSunlit(target, new Date(now)) : sunEl > -6;
+      const eye = Mx.nakedEye({
+        elevation: look.elevation,
+        sunElevation: sunEl,
+        sunlit,
+        needsDarkness: !!(layer && layer.visibility && layer.visibility.needsDarkness),
+        needsSunlight: !!(layer && layer.visibility && layer.visibility.needsSunlight),
+        range: look.range,
+        maxRange: layer && layer.visibility ? layer.visibility.maxRange : undefined,
+        minElevation: layer && layer.visibility ? layer.visibility.minElevation : 10,
+      });
+      view = {
+        azimuth: look.azimuth, elevation: look.elevation, range: look.range,
+        groundRange: look.groundRange, sunElevation: sunEl, sunlit,
+        footprint: Mx.horizonRadius(item.altitude || 0),
+        eye,
+        approach: Mx.closestApproach(observer, {
+          lat: item.lat, lng: item.lng, altitude: item.altitude || 0,
+          speed: item.speed, heading: item.heading,
+        }),
+      };
+      track.sightline.setLatLngs([[observer.lat, observer.lng], at]);
+      track.footprint.setLatLng(at).setRadius(view.footprint);
+    }
+    track.view = view;
+
+    const last = track.points[track.points.length - 1];
+    if (!last || now - last.t >= MIN_POINT_GAP_MS) {
+      track.points.push({
+        t: now, lat: item.lat, lng: item.lng,
+        alt: Number.isFinite(item.altitude) ? Math.round(item.altitude) : null,
+        spd: Number.isFinite(item.speed) ? Math.round(item.speed) : null,
+        az: view ? Math.round(view.azimuth) : null,
+        el: view ? Math.round(view.elevation * 10) / 10 : null,
+        rng: view ? Math.round(view.range) : null,
+      });
+      if (track.points.length > MAX_POINTS) track.points = track.points.slice(-MAX_POINTS);
+      track.trail.addLatLng(at);
+      const drawn = track.trail.getLatLngs();
+      if (drawn.length > MAX_POINTS) track.trail.setLatLngs(drawn.slice(-MAX_POINTS));
+      saveTracks();
+    }
+
+    // "When can I see it": the layer answers if it can do better than geometry.
+    if (observer && layer && typeof layer.predictPass === 'function') {
+      const stale = !track.pass || !track.pass.computedAt || now - track.pass.computedAt > 120000;
+      if (stale) {
+        try {
+          track.pass = Object.assign({ computedAt: now }, layer.predictPass(item, observer) || {});
+        } catch (_) {
+          track.pass = null;
+        }
+      }
+    }
+
+    // The map only moves if this track was explicitly told to lead it.
+    if (live.followKey === track.key) map.panTo(at, { animate: false });
+    if (track.hovering) drawTimeMarks(track);
+  }
+
+  const updateTracks = () => {
+    for (const track of live.tracks.values()) updateTrack(track);
+    drawGpsLines();
     renderTrackedReadout();
+  };
+
+  /**
+   * With a live GPS fix, every tracked object gets its own line back to where
+   * you actually are, and the whole set gets an outline: the ground your GPS
+   * position and everything you are following span between them, with its area.
+   *
+   * These are the one thing drawn without hovering, because they answer the
+   * question you asked by turning GPS on — where am I in all this.
+   */
+  function drawGpsLines() {
+    if (!live.gpsLayer) live.gpsLayer = L.layerGroup([], { pane: 'smx-live-raster' });
+    live.gpsLayer.clearLayers();
+    live.coverage = null;
+
+    const from = gpsFix();
+    if (!from || !live.gpsLines || !live.tracks.size) {
+      live.gpsLayer.remove();
+      return;
+    }
+
+    const heads = [];
+    for (const track of live.tracks.values()) {
+      const item = trackedItem(track);
+      const at = live.replay.on ? Mx.sampleTrack(track.points, live.replay.t) : item;
+      if (!at || !Number.isFinite(at.lat)) continue;
+      heads.push({ lat: at.lat, lng: at.lng });
+      L.polyline([[from.lat, from.lng], [at.lat, at.lng]], {
+        pane: 'smx-live-raster', color: track.color, weight: 1.5, opacity: 0.7, dashArray: '1 5',
+        interactive: true,
+      })
+        .bindTooltip(`${track.emoji} ${X.esc(track.label)}<br>${km(Mx.haversine(from, at))} from your GPS fix`,
+          { sticky: true })
+        .addTo(live.gpsLayer);
+    }
+
+    if (heads.length >= 2) {
+      const ring = Mx.convexHull([from, ...heads]);
+      if (ring.length >= 3) {
+        const area = Mx.polygonArea(ring);
+        live.coverage = { area, corners: ring.length, centre: Mx.centroid(ring) };
+        L.polygon(ring.map((p) => [p.lat, p.lng]), {
+          pane: 'smx-live-raster', color: X.ANNOTATION, weight: 1, opacity: 0.6,
+          dashArray: '4 4', fillColor: X.ANNOTATION, fillOpacity: 0.06, interactive: true,
+        })
+          .bindTooltip(`Area you and your ${heads.length} tracked objects span`
+            + `<br>${(area / 1e6).toLocaleString(undefined, { maximumFractionDigits: 0 })} km²`, { sticky: true })
+          .addTo(live.gpsLayer);
+      }
+    }
+    if (!map.hasLayer(live.gpsLayer)) live.gpsLayer.addTo(map);
+  }
+
+  /* -------------------------------- replay -------------------------------- */
+
+  /**
+   * Replay walks the recorded window instead of showing only the newest fix.
+   * Every tracked object gets a ghost marker at where it was at the replay time,
+   * and its line is clipped to what it had flown by then — so scrubbing back
+   * unwinds the whole picture, not one object at a time.
+   */
+  function replayWindow() {
+    let from = Infinity, to = -Infinity;
+    for (const track of live.tracks.values()) {
+      if (!track.points.length) continue;
+      from = Math.min(from, track.points[0].t);
+      to = Math.max(to, track.points[track.points.length - 1].t);
+    }
+    return Number.isFinite(from) ? { from, to } : null;
+  }
+
+  function setReplay(on) {
+    const window = replayWindow();
+    if (on && !window) { X.notify('Nothing recorded yet — track something for a while first.', 'warn'); return; }
+    live.replay.on = !!on;
+    if (on) {
+      live.replay.from = window.from;
+      live.replay.to = window.to;
+      live.replay.t = Mx.clamp(live.replay.t || window.to, window.from, window.to);
+      live.followKey = null;                      // a replay never drags the camera
+      drawReplay();
+    } else {
+      pauseReplay();
+      for (const track of live.tracks.values()) {
+        if (track.ghost) { track.ghost.remove(); track.ghost = null; }
+        track.trail.setLatLngs(track.points.map((p) => [p.lat, p.lng]));
+      }
+    }
+    renderPanel();
+  }
+
+  function setReplayTime(t) {
+    const window = replayWindow();
+    if (!window) return;
+    live.replay.from = window.from;
+    live.replay.to = window.to;
+    live.replay.t = Mx.clamp(t, window.from, window.to);
+    drawReplay();
+    drawGpsLines();
+    renderTrackedReadout();
+  }
+
+  /** Put every track where it was at the replay time. */
+  function drawReplay() {
+    if (!live.replay.on) return;
+    const t = live.replay.t;
+    for (const track of live.tracks.values()) {
+      const at = Mx.sampleTrack(track.points, t);
+      if (!at) continue;
+      track.trail.setLatLngs(Mx.trackUpTo(track.points, t).map((p) => [p.lat, p.lng]));
+      if (!track.ghost) {
+        track.ghost = L.marker([at.lat, at.lng], {
+          pane: 'smx-live', zIndexOffset: 700,
+          icon: L.divIcon({
+            className: 'smx-live-dot replay', iconSize: [22, 22], iconAnchor: [11, 11],
+            html: `<span class="glyph">${track.emoji}</span>`,
+          }),
+        }).addTo(map);
+        track.ghost.bindTooltip(() => replayLabel(track), { direction: 'top' });
+      } else {
+        track.ghost.setLatLng([at.lat, at.lng]);
+      }
+      const from = observerPoint();
+    if (from && track.hovering) track.sightline.setLatLngs([[from.lat, from.lng], [at.lat, at.lng]]);
+    }
+  }
+
+  function replayLabel(track) {
+    const at = Mx.sampleTrack(track.points, live.replay.t);
+    if (!at) return X.esc(track.label);
+    return `<b>${track.emoji} ${X.esc(track.label)}</b><br>${new Date(live.replay.t).toLocaleTimeString()}`
+      + `${at.alt ? `<br>${(at.alt / 1000).toFixed(at.alt > 10000 ? 0 : 1)} km up` : ''}`
+      + `${at.rng ? `<br>${km(at.rng)} from you` : ''}`
+      + `${at.before || at.after ? '<br><small>outside the recording</small>' : ''}`;
+  }
+
+  function playReplay() {
+    if (!live.replay.on || live.replay.playing) return;
+    if (live.replay.t >= live.replay.to) live.replay.t = live.replay.from;
+    live.replay.playing = true;
+    live.replay.last = performance.now();
+    const step = (now) => {
+      if (!live.replay.playing) return;
+      const dt = Mx.clamp((now - live.replay.last) / 1000, 0, 0.25);
+      live.replay.last = now;
+      live.replay.t += dt * live.replay.rate * 1000;
+      if (live.replay.t >= live.replay.to) {
+        live.replay.t = live.replay.to;
+        pauseReplay();
+      }
+      drawReplay();
+      renderReplayControls();
+      if (live.replay.playing) live.replay.frame = requestAnimationFrame(step);
+    };
+    live.replay.frame = requestAnimationFrame(step);
+    renderReplayControls();
+  }
+
+  function pauseReplay() {
+    live.replay.playing = false;
+    if (live.replay.frame) cancelAnimationFrame(live.replay.frame);
+    live.replay.frame = null;
+    renderReplayControls();
+  }
+
+  /* -------------------------- saved track history -------------------------- */
+
+  let savedTracks = {};
+  try {
+    savedTracks = store.get(TRACK_STORE, {}) || {};
+  } catch (_) {
+    savedTracks = {};
+  }
+
+  function saveTracks() {
+    // Start from what is already on disk so a stopped track's history survives.
+    const out = Object.assign({}, savedTracks);
+    for (const track of live.tracks.values()) {
+      out[track.key] = {
+        layerId: track.layerId, itemId: track.itemId, label: track.label,
+        startedAt: track.startedAt, points: track.points,
+      };
+    }
+    savedTracks = out;
+    try {
+      store.set(TRACK_STORE, out);
+    } catch (_) {
+      // Storage is finite; drop the oldest half rather than losing the newest.
+      for (const track of live.tracks.values()) track.points = track.points.slice(-Math.floor(MAX_POINTS / 2));
+      try { store.set(TRACK_STORE, out); } catch (__) { /* give up quietly */ }
+    }
+  }
+
+  /** Restore any saved track whose layer is on again. */
+  function restoreTracks() {
+    for (const key of Object.keys(savedTracks)) {
+      const rec = savedTracks[key];
+      if (rec && live.state[rec.layerId] && live.state[rec.layerId].on) startTracking(rec.layerId, rec.itemId);
+    }
+  }
+
+  /** Drop a saved history for good — the only thing that deletes recorded fixes. */
+  function forgetTrack(key) {
+    const track = live.tracks.get(key);
+    if (track) {
+      track.points = [];
+      track.trail.setLatLngs([]);
+      track.startedAt = Date.now();
+    }
+    delete savedTracks[key];
+    try { store.set(TRACK_STORE, savedTracks); } catch (_) { /* best effort */ }
+    renderPanel();
+  }
+
+  function forgetAllTracks() {
+    savedTracks = {};
+    for (const track of live.tracks.values()) {
+      track.points = [];
+      track.trail.setLatLngs([]);
+      track.startedAt = Date.now();
+    }
+    try { store.set(TRACK_STORE, {}); } catch (_) { /* best effort */ }
+    renderPanel();
+  }
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (ms) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+      + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  /**
+   * Export one track. GPX so it opens in anything that reads a track, CSV for a
+   * spreadsheet, JSON for everything else — each keeps the timestamps, and the
+   * look angles that were true at the time.
+   */
+  function exportTrack(key, format) {
+    const track = live.tracks.get(key);
+    if (!track || !track.points.length) { X.notify('Nothing recorded yet.', 'warn'); return; }
+    const safe = track.label.replace(/[^\w.-]+/g, '_').slice(0, 40);
+    const name = `starmap-track-${safe}-${stamp(track.startedAt).replace(/[:T]/g, '')}`;
+    if (format === 'gpx') {
+      const pts = track.points.map((p) => `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}">`
+        + `${p.alt !== null ? `<ele>${p.alt}</ele>` : ''}`
+        + `<time>${new Date(p.t).toISOString()}</time></trkpt>`).join('\n');
+      download(`${name}.gpx`,
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + '<gpx version="1.1" creator="DevHelper Map Lab" xmlns="http://www.topografix.com/GPX/1/1">\n'
+        + `  <trk><name>${X.esc(track.label)}</name><trkseg>\n${pts}\n  </trkseg></trk>\n</gpx>\n`,
+        'application/gpx+xml');
+    } else if (format === 'csv') {
+      const rows = ['time,lat,lon,altitude_m,speed_mps,azimuth_deg,elevation_deg,range_m']
+        .concat(track.points.map((p) => [new Date(p.t).toISOString(), p.lat.toFixed(6), p.lng.toFixed(6),
+          p.alt ?? '', p.spd ?? '', p.az ?? '', p.el ?? '', p.rng ?? ''].join(',')));
+      download(`${name}.csv`, `${rows.join('\n')}\n`, 'text/csv');
+    } else {
+      download(`${name}.json`, JSON.stringify({
+        label: track.label, layer: track.layerId, id: track.itemId,
+        startedAt: new Date(track.startedAt).toISOString(),
+        observer: live.home, points: track.points,
+      }, null, 2), 'application/json');
+    }
   }
 
   /* ------------------------------- alerts ------------------------------- */
@@ -398,6 +902,9 @@
         <h4>Tracking</h4>
         <div id="smxTracked"></div>
 
+        <h4>Replay</h4>
+        <div id="smxReplay"></div>
+
         <h4>Alerts <span class="smx-hint" id="smxAlertCount"></span></h4>
         <div id="smxAlerts"></div>
       `;
@@ -424,6 +931,7 @@
       });
 
       restore();
+      restoreTracks();
       renderPanel();
     },
     onShow: () => renderPanel(),
@@ -442,6 +950,7 @@
     renderHome();
     renderLayers();
     renderTrackedReadout();
+    renderReplayControls();
     renderAlerts();
     const auto = root.querySelector('#smxAuto');
     if (auto) auto.checked = live.autoRefresh;
@@ -455,7 +964,20 @@
   function renderHome() {
     const host = root.querySelector('#smxHome');
     if (!host) return;
+    const fix = gpsFix();
     host.innerHTML = `
+      ${fix ? `<div class="smx-row" style="margin-top:0">
+          <span class="smx-chip" style="border-color:var(--green)">📡 live GPS fix in use
+            ${fix.accuracy ? `· ±${Math.round(fix.accuracy)} m` : ''}</span>
+        </div>
+        <div class="smx-row">
+          <label class="smx-lbl grow" for="smxGpsLines">Lines from my GPS to tracked objects</label>
+          <input type="checkbox" id="smxGpsLines" ${live.gpsLines ? 'checked' : ''} />
+        </div>
+        ${live.coverage ? `<div class="smx-hint" style="margin:0">Together you span
+          <b>${(live.coverage.area / 1e6).toLocaleString(undefined, { maximumFractionDigits: 0 })} km²</b>
+          — the dashed outline on the map.</div>` : ''}` : ''}`;
+    host.innerHTML += `
       ${live.home ? `<div class="smx-mono">${X.esc(live.home.label)} · ${live.home.lat.toFixed(4)}, ${live.home.lng.toFixed(4)}</div>`
         : '<div class="smx-hint">No location set. Everything that needs a distance from you is off until there is one.</div>'}
       <div class="smx-btns" style="margin-top:6px">
@@ -469,6 +991,14 @@
       </div>
       <div class="smx-hint">Alerts fire when something crosses this circle. It is also the search radius for the
         layers that ask for one.</div>`;
+    const gpsLines = host.querySelector('#smxGpsLines');
+    if (gpsLines) {
+      gpsLines.addEventListener('change', (e) => {
+        live.gpsLines = e.target.checked;
+        drawGpsLines();
+        renderPanel();
+      });
+    }
     host.querySelector('#smxHomeGps').addEventListener('click', useGps);
     host.querySelector('#smxHomeCentre').addEventListener('click', () => setHome(map.getCenter(), 'Map centre'));
     host.querySelector('#smxHomePick').addEventListener('click', () => {
@@ -517,33 +1047,205 @@
     }).join('');
   }
 
+  /**
+   * One card per tracked object: where to look, how far, whether it can be seen
+   * with the naked eye right now, when it next can be, and what has been
+   * recorded so far.
+   */
   function renderTrackedReadout() {
     const host = root && root.querySelector('#smxTracked');
     if (!host) return;
-    const item = currentTracked();
-    if (!live.tracked || !item) {
-      host.innerHTML = '<div class="smx-hint">Nothing tracked. Click any live object on the map and press Track.</div>';
+    if (!live.tracks.size) {
+      host.innerHTML = `<div class="smx-hint">Nothing tracked. Click any live object on the map and press
+        Track — more than one at a time is fine.</div>`;
       return;
     }
-    const d = distanceToHome(item);
+
     host.innerHTML = `
-      <div class="smx-mono">${X.esc(item.label || item.id)}</div>
-      <div class="smx-stats">
-        <div class="smx-stat"><b>${item.lat.toFixed(3)}</b><small>lat</small></div>
-        <div class="smx-stat"><b>${item.lng.toFixed(3)}</b><small>lon</small></div>
-        ${Number.isFinite(item.altitude) ? `<div class="smx-stat"><b>${Math.round(item.altitude)}</b><small>alt m</small></div>` : ''}
-        ${Number.isFinite(item.speed) ? `<div class="smx-stat"><b>${Math.round(item.speed * 3.6)}</b><small>km/h</small></div>` : ''}
-        ${d !== null ? `<div class="smx-stat"><b>${km(d)}</b><small>from you</small></div>` : ''}
+      <div class="smx-row">
+        <label class="smx-lbl grow">${live.tracks.size} tracked${live.home ? '' : ' · set a location for look angles'}</label>
+        <button class="smx-btn" id="smxTrackForgetAll"
+                title="Delete every saved track history">${X.icon('trash')}</button>
+        <button class="smx-btn" id="smxTrackStopAll" title="Stop tracking everything">${X.icon('x')}</button>
       </div>
-      <div class="smx-btns">
-        <button class="smx-btn" id="smxTrackCam">${X.icon('crosshair')} ${live.followCamera === false ? 'Follow camera' : 'Stop following'}</button>
-        <button class="smx-btn" id="smxTrackStop">${X.icon('x')} Stop</button>
-      </div>`;
-    host.querySelector('#smxTrackStop').addEventListener('click', stopTracking);
-    host.querySelector('#smxTrackCam').addEventListener('click', () => {
-      live.followCamera = live.followCamera === false;
+      ${[...live.tracks.values()].map((t) => trackCard(t)).join('')}`;
+
+    host.querySelector('#smxTrackStopAll').addEventListener('click', () => stopTracking());
+    host.querySelector('#smxTrackForgetAll').addEventListener('click', forgetAllTracks);
+    X.on(host, '[data-track-forget]', 'click', (_e, b) => forgetTrack(b.dataset.trackForget));
+    X.on(host, '[data-track-follow]', 'click', (_e, b) => {
+      const key = b.dataset.trackFollow;
+      live.followKey = live.followKey === key ? null : key;   // toggle: follow, or hold still
+      if (live.followKey) updateTracks();
       renderTrackedReadout();
     });
+    X.on(host, '[data-track-go]', 'click', (_e, b) => {
+      const t = live.tracks.get(b.dataset.trackGo);
+      const item = t && trackedItem(t);
+      if (item) map.flyTo([item.lat, item.lng], Math.max(map.getZoom(), 6));
+    });
+    X.on(host, '[data-track-stop]', 'click', (_e, b) => stopTracking(b.dataset.trackStop));
+    X.on(host, '[data-track-export]', 'click', (_e, b) => {
+      const [key, format] = b.dataset.trackExport.split('|');
+      exportTrack(key, format);
+    });
+  }
+
+  function trackCard(track) {
+    const item = trackedItem(track);
+    const v = track.view;
+    const following = live.followKey === track.key;
+    const recorded = track.points.length;
+    const span = recorded > 1 ? (track.points[recorded - 1].t - track.points[0].t) / 1000 : 0;
+
+    return `
+      <div class="smx-card${following ? ' on' : ''}">
+        <div class="smx-row" style="margin-top:0">
+          <span class="smx-sw" style="background:${track.color}"></span>
+          <b class="grow" style="min-width:0;font-size:12px">${track.emoji} ${X.esc(track.label)}</b>
+          <button class="smx-btn${following ? ' on' : ''}" data-track-follow="${track.key}"
+                  title="${following ? 'Stop the camera following it — the map holds still'
+                    : 'Let the camera follow it (the map stays put by default)'}">
+            ${following ? X.icon('crosshair') : X.icon('pin')}
+          </button>
+          <button class="smx-btn" data-track-go="${track.key}" title="Jump to it once">${X.icon('play')}</button>
+          <button class="smx-btn" data-track-stop="${track.key}" title="Stop tracking">${X.icon('x')}</button>
+        </div>
+
+        ${!item ? `<div class="smx-hint smx-warn">Not in the latest data — it left the feed or the view.
+          Everything below is its last fix, ${ago(track.points.length ? track.points[track.points.length - 1].t : 0)}.</div>` : ''}
+
+        ${v ? `
+          <div class="smx-stats">
+            <div class="smx-stat"><b>${Mx.compass(v.azimuth)}</b><small>${item ? 'look' : 'was'} ${Math.round(v.azimuth)}\u00b0</small></div>
+            <div class="smx-stat"><b>${v.elevation.toFixed(0)}\u00b0</b><small>${v.elevation > 0 ? 'above horizon' : 'below horizon'}</small></div>
+            <div class="smx-stat"><b>${km(v.range)}</b><small>line of sight</small></div>
+            <div class="smx-stat"><b>${km(v.groundRange)}</b><small>over ground</small></div>
+          </div>
+          <div class="smx-row" style="margin:2px 0">
+            <span class="smx-chip" style="border-color:${v.eye.visible ? 'var(--green)' : 'var(--border)'}">
+              ${v.eye.visible ? '👁️ visible now to the naked eye' : `🚫 ${X.esc(v.eye.reasons[0])}`}
+            </span>
+          </div>
+          ${v.eye.reasons.length > 1 ? `<div class="smx-hint" style="margin:0">also ${X.esc(v.eye.reasons.slice(1).join(', '))}</div>` : ''}
+          <div class="smx-hint" style="margin:2px 0">
+            ${whenToLook(track, v)}
+          </div>
+          ${v.footprint > 0 ? `<div class="smx-hint" style="margin:0">Above the horizon anywhere inside
+            ${km(v.footprint)} of the point under it — that circle is drawn on the map.</div>` : ''}
+        ` : '<div class="smx-hint">Set your location to get direction, elevation and visibility.</div>'}
+
+        <div class="smx-row" style="margin:4px 0 0">
+          <span class="smx-lbl grow" style="min-width:0">${recorded} fixes${span > 60 ? ` over ${Mx.dur(span)}` : ''} saved</span>
+          <button class="smx-btn" data-track-export="${track.key}|gpx" title="Export as GPX">GPX</button>
+          <button class="smx-btn" data-track-export="${track.key}|csv" title="Export as CSV">CSV</button>
+          <button class="smx-btn" data-track-export="${track.key}|json" title="Export as JSON">JSON</button>
+          <button class="smx-btn" data-track-forget="${track.key}"
+                  title="Delete the recorded history for this object">${X.icon('trash')}</button>
+        </div>
+      </div>`;
+  }
+
+  /** The plain-language answer to "when do I go outside and look up?" */
+  function whenToLook(track, v) {
+    if (!trackedItem(track)) return 'Waiting for it to come back into the data before predicting anything.';
+    if (v.eye.visible) return '<b>Look now.</b> It is up there, in the direction above.';
+    const pass = track.pass;
+    if (pass && pass.aos) {
+      const secs = (new Date(pass.aos).valueOf() - Date.now()) / 1000;
+      if (secs > 0) {
+        return `Next pass in <b>${Mx.dur(secs)}</b> (${Mx.clock(secondsOfDay(pass.aos))})`
+          + `${pass.maxElevation ? `, up to ${Math.round(pass.maxElevation)}\u00b0` : ''}`
+          + `${pass.visible === false ? ' — but in daylight or shadow, so not to the naked eye' : ''}`
+          + `${pass.visible === true ? ' — and dark enough to see it' : ''}.`;
+      }
+      return 'Overhead now, but not visible.';
+    }
+    if (v.approach && v.approach.approaching) {
+      return `Closest in <b>${Mx.dur(v.approach.seconds)}</b>, passing ${km(v.approach.distance)} away`
+        + `${v.elevation > 0 ? '' : ' — still below your horizon'}.`;
+    }
+    if (v.approach && !v.approach.approaching) return 'Already past its closest point and moving away.';
+    return 'No prediction for this one — it does not report a course, and its layer offers no pass model.';
+  }
+
+  const secondsOfDay = (when) => {
+    const d = new Date(when);
+    return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  };
+
+  const REPLAY_RATES = [1, 10, 60, 300, 1800];
+
+  /**
+   * The scrubber. It spans exactly the recorded window, so the ends of the
+   * slider are the first and last fix rather than an arbitrary clock.
+   */
+  function renderReplayControls() {
+    const host = root && root.querySelector('#smxReplay');
+    if (!host) return;
+    const window = replayWindow();
+    if (!window) {
+      host.innerHTML = '<div class="smx-hint">Track something for a minute, then replay it here.</div>';
+      return;
+    }
+    const r = live.replay;
+    const span = Math.max(1, (window.to - window.from) / 1000);
+
+    // While playing, only the moving parts are rewritten — rebuilding the slider
+    // every frame would fight the pointer that is dragging it.
+    const slider = host.querySelector('#smxReplaySlider');
+    if (slider && r.on) {
+      slider.min = String(Math.floor(window.from / 1000));
+      slider.max = String(Math.ceil(window.to / 1000));
+      if (document.activeElement !== slider) slider.value = String(Math.round(r.t / 1000));
+      const clockEl = host.querySelector('#smxReplayClock');
+      if (clockEl) clockEl.textContent = new Date(r.t).toLocaleTimeString();
+      const playBtn = host.querySelector('#smxReplayPlay');
+      if (playBtn) playBtn.innerHTML = r.playing ? `${X.icon('pause')} Pause` : `${X.icon('play')} Play`;
+      return;
+    }
+
+    host.innerHTML = `
+      <div class="smx-row">
+        <label class="smx-lbl grow" for="smxReplayOn">Replay the recording</label>
+        <input type="checkbox" id="smxReplayOn" ${r.on ? 'checked' : ''} />
+      </div>
+      <div class="smx-hint" style="margin:2px 0">
+        ${Mx.dur(span)} recorded, ${new Date(window.from).toLocaleTimeString()} to ${new Date(window.to).toLocaleTimeString()}
+        ${r.on ? '· live updates keep appending while you scrub' : ''}
+      </div>
+      ${r.on ? `
+        <div class="smx-row">
+          <button class="smx-btn" id="smxReplayPlay" style="min-width:74px">${r.playing ? `${X.icon('pause')} Pause` : `${X.icon('play')} Play`}</button>
+          <button class="smx-btn" id="smxReplayStart" title="Back to the first fix">${X.icon('rewind')}</button>
+          <b class="grow smx-mono" id="smxReplayClock" style="text-align:right;font-size:14px">${new Date(r.t).toLocaleTimeString()}</b>
+        </div>
+        <input type="range" id="smxReplaySlider" aria-label="Replay time"
+               min="${Math.floor(window.from / 1000)}" max="${Math.ceil(window.to / 1000)}" step="1"
+               value="${Math.round(r.t / 1000)}" />
+        <div class="smx-row" style="justify-content:space-between;margin-top:-2px">
+          <small class="smx-hint">${new Date(window.from).toLocaleTimeString()}</small>
+          <small class="smx-hint">${new Date(window.to).toLocaleTimeString()}</small>
+        </div>
+        <div class="smx-row">
+          <label class="smx-lbl" for="smxReplayRate">Speed</label>
+          <select id="smxReplayRate" class="grow">
+            ${REPLAY_RATES.map((v) => `<option value="${v}" ${v === r.rate ? 'selected' : ''}>${v}× real time</option>`).join('')}
+          </select>
+        </div>
+        <div class="smx-hint">Each tracked object sits where it was at that moment, and its line is clipped to
+          what it had covered by then. Hover a line to read any single fix.</div>
+      ` : ''}`;
+
+    host.querySelector('#smxReplayOn').addEventListener('change', (e) => setReplay(e.target.checked));
+    if (!r.on) return;
+    host.querySelector('#smxReplayPlay').addEventListener('click', () => (r.playing ? pauseReplay() : playReplay()));
+    host.querySelector('#smxReplayStart').addEventListener('click', () => { pauseReplay(); setReplayTime(window.from); });
+    host.querySelector('#smxReplaySlider').addEventListener('input', (e) => {
+      pauseReplay();
+      setReplayTime(Number(e.target.value) * 1000);
+    });
+    host.querySelector('#smxReplayRate').addEventListener('change', (e) => { r.rate = Number(e.target.value); });
   }
 
   function renderAlerts() {
@@ -593,6 +1295,10 @@
 
   X.live = {
     state: live,
+    get tracks() { return live.tracks; },
+    trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks,
+    setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo,
+    drawGpsLines, observerPoint, gpsFix,
     get layers() { return live.layers; },
     layerState: (id) => live.state[id],
     register, setLayer, refresh, refreshAll, setHome, useGps,

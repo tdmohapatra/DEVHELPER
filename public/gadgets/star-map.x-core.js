@@ -140,6 +140,10 @@ window.SMX = (function () {
   .smx-live-dot.tracked .glyph { filter: drop-shadow(0 0 6px #ec4899); }
   .smx-live-dot.tracked::after { content:''; position:absolute; inset:-5px; border-radius:50%;
                                  border:2px solid #ec4899; animation: smx-mark 1.6s infinite; }
+  .smx-live-dot.replay .glyph { opacity:.85; filter: drop-shadow(0 0 5px #ec4899); }
+  .smx-timemark span { display:block; font-size:9.5px; font-weight:700; text-align:center;
+                       color:var(--text); background:var(--surface); border:1px solid var(--border);
+                       border-radius:999px; padding:0 4px; box-shadow:var(--shadow); }
   .smx-home span { display:block; width:26px; height:26px; line-height:24px; text-align:center;
                    color:#ec4899; font-size:20px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.8)); }
 

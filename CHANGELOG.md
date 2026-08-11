@@ -89,9 +89,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   inside so many lunar distances, a rough sea state, a severe warning where you
   are. Each fires once per object, logs with a jump-to-map button, and can be
   silenced without being switched off.
-- **Tracking**: click any live object and follow it. The camera can stay on it, a
-  trail draws behind it, and a readout gives position, altitude, speed and
-  distance from you.
+- **Tracking**, several objects at once. The map never moves on its own: camera
+  following is opt-in per object, so a track can be watched without the view
+  being dragged around.
+  - **The map shows the line, and only the line.** Hovering it gives the numbers
+    for the fix nearest the pointer — its time, position, altitude, speed, how
+    far away it was and where to look — and brings up the sightline to your
+    location and the circle it can be seen from, both of which leave with the
+    pointer.
+  - **Where to look, precisely**: compass azimuth and elevation from proper
+    observer geometry, line-of-sight range alongside ground distance, and a
+    naked-eye verdict that says why not when the answer is no — below the
+    horizon, broad daylight, in the Earth's shadow, or simply too far.
+  - **When to look**: a real pass predictor for satellites (next rise above 10°,
+    peak elevation, and whether it will be sunlit against a dark sky), and
+    closest-approach extrapolation for anything reporting a course.
+  - **Saved history.** Every fix is stored with its timestamp and the look angles
+    that were true then, survives closing the tool, and exports as GPX, CSV or
+    JSON. Deleting a history is a separate, deliberate act.
+  - **Replay** the recording: a scrubber across the recorded window with play,
+    pause and speed. Each object sits where it was at that moment and its line is
+    clipped to what it had covered, with time marks along it.
+  - **With a live GPS fix**, distances are measured from where you actually are,
+    each tracked object gets its own line back to you, and the area you and they
+    span is outlined and measured.
 
 ### Changed
 - **CSP widened** for the map: `img-src` now allows any HTTPS image (tiles), and
