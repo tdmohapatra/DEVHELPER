@@ -670,7 +670,9 @@ describe("the app's own route, animated", () => {
     // line. It is frame-driven, so assert that it advances rather than pinning a
     // deadline — requestAnimationFrame starves when the whole suite runs at once.
     expect(deco.travelled.getLatLngs()).toHaveLength(0);
-    await vi.waitUntil(() => deco.travelled.getLatLngs().length > line.length / 2, { timeout: 15000 });
+    // Only that it starts advancing: how far it gets in a given wall-clock window
+    // depends on how starved requestAnimationFrame is, which on CI is anyone's guess.
+    await vi.waitUntil(() => deco.travelled.getLatLngs().length > 1, { timeout: 15000 });
   }, 25000);
 
   it("replaces the decoration rather than stacking one per selection", () => {
