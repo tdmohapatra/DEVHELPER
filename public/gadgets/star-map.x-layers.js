@@ -216,8 +216,9 @@
     id: 'aircraft',
     label: 'Aircraft',
     emoji: '✈️',
-    hint: 'airplanes.live ADS-B feed, around the middle of the view. '
-      + 'Military and Indian state aircraft are marked in green, with a trail.',
+    hint: 'airplanes.live ADS-B feed, around the middle of the view. Airliners, turboprops, '
+      + 'helicopters, gliders, drones and ground traffic each have their own silhouette; '
+      + 'military and Indian state aircraft are green, with a trail.',
     attribution: '<a href="https://airplanes.live">airplanes.live</a>',
     every: 20,
     needsBounds: true,
@@ -261,15 +262,21 @@
           staleBy: Number.isFinite(a.seen_pos) && Number.isFinite(a.gs) ? a.seen_pos * a.gs * KT : null,
           ...(() => {
             const mil = classifyAircraft(a);
-            if (!mil) return {};
+            const kind = mil ? (classifyKind(a) === 'helicopter' ? 'helicopter' : 'heavy') : classifyKind(a);
+            const def = AIRCRAFT_CLASSES[kind] || AIRCRAFT_CLASSES.unknown;
+            const grounded = a.alt_baro === 'ground';
             return {
-              military: mil,
+              military: mil || undefined,
+              kind,
+              kindLabel: def.label,
               registration: a.r || null,
-              // Its own mark, its own colour, its own trail: a state aircraft
-              // should be findable at a glance among forty airliners.
-              iconHtml: PLANE_SVG,
-              iconClass: 'smx-mil',
-              iconSize: 26,
+              description: a.desc || null,
+              // Shape carries the class; colour stays out of it, except for the
+              // green that means military. Ground traffic is dimmed rather than
+              // hidden, so a busy apron does not shout over the air picture.
+              iconHtml: aircraftSvg(kind),
+              iconClass: `smx-ac smx-ac-${kind}${mil ? ' smx-mil' : ''}${grounded ? ' smx-ac-parked' : ''}`,
+              iconSize: def.size,
             };
           })(),
           // Route and airframe are already known for an aeroplane we have seen.
@@ -296,7 +303,9 @@
             ['squawk', a.squawk ? X.esc(a.squawk) : null],
             ['position', Number.isFinite(a.seen_pos)
               ? `${a.seen_pos < 10 ? a.seen_pos.toFixed(1) : Math.round(a.seen_pos)} s old` : null],
-          ]) + (Number.isFinite(a.seen_pos) ? `<div class="smx-meta">`
+            ['class', X.esc((AIRCRAFT_CLASSES[classifyKind(a)] || AIRCRAFT_CLASSES.unknown).label)],
+          ]) + (a.desc ? `<div class="smx-meta">${X.esc(a.desc)}</div>` : '')
+            + (Number.isFinite(a.seen_pos) ? `<div class="smx-meta">`
             + `broadcast ${new Date(serverNow - a.seen_pos * 1000).toLocaleTimeString()}`
             + `${Number.isFinite(a.gs) ? ` · up to ${X.dist(a.seen_pos * a.gs * KT)} on from there` : ''}`
             + `</div>` : ''),
@@ -360,6 +369,107 @@
     },
   });
 
+  /* ---------------------------- what is it? ---------------------------- */
+
+  /**
+   * Aircraft are told apart by silhouette, not by colour.
+   *
+   * Colour in this map already means something — cool hues identify, the green to
+   * red ramp measures — so painting a rainbow of aircraft types would break the
+   * one rule that keeps it readable. Shape is free: a helicopter, a glider and an
+   * airliner are unmistakable from their outlines at 20 pixels, and the only
+   * colour exception is the green reserved for military and state aircraft.
+   *
+   * The class comes from the ADS-B emitter category where the aircraft sends one,
+   * falling back to its ICAO type code, which is the more reliable of the two in
+   * practice: plenty of airliners transmit A0, "no information".
+   */
+  const HELI_TYPE = /^(EC|AS|H\d|B06|B412|B429|R22|R44|R66|S76|S92|A109|A139|AW1|MI\d|H125|H145|H155|H160|H175|H500|EH10)/i;
+  const TURBOPROP_TYPE = /^(AT[4-9]|DH8|D328|SF34|E120|B190|C208|C212|C295|DHC|F27|L410|PC12|SB20|SW4|TBM|Y12)/i;
+  const BIZJET_TYPE = /^(C25|C55|C56|C68|C750|CL30|CL35|CL60|E50|E55|E35|F2TH|F900|FA[0-9]|G150|G280|GALX|GL5T|GL6T|GL7T|GLEX|H25|LJ3|LJ4|LJ6|LJ7|PRM1)/i;
+  const LIGHT_TYPE = /^(C1[0-9]{2}|C2[0-9]{2}|P28|PA[0-9]{2}|SR2|DA[24]|BE[0-9]{2}|AA5|M20|RV[0-9])/i;
+
+  /** One entry per class: what to call it, how to draw it, how big. */
+  const AIRCRAFT_CLASSES = {
+    heavy: {
+      label: 'Heavy jet', size: 26,
+      svg: '<path d="M12 1.6l1.9 7.2 8.1 3.4v2.1l-8.1-1.4v5.7l3.1 2.1v1.7L12 21.2l-5 1.2v-1.7l3.1-2.1v-5.7L2 14.3v-2.1l8.1-3.4z"/>'
+        + '<path d="M6.6 10.6l1.2.5M17.4 10.6l-1.2.5" stroke="currentColor" stroke-width="1.4"/>',
+    },
+    airliner: {
+      label: 'Airliner', size: 22,
+      svg: '<path d="M12 2l1.8 6.9 7.7 3.2v2l-7.7-1.3v5.4l2.9 2v1.6L12 20.6l-4.7 1.2v-1.6l2.9-2v-5.4L2.5 14.1v-2l7.7-3.2z"/>',
+    },
+    turboprop: {
+      label: 'Turboprop', size: 21,
+      // Straight wings and a visible prop line: an ATR is not a jet.
+      svg: '<path d="M11.1 2.6h1.8l.7 6.4h7.9v2.2h-7.9v6l2.7 1.9v1.6L12 19.6l-4.3 1.1v-1.6l2.7-1.9v-6H2.5V9h7.9z"/>'
+        + '<path d="M8.4 3.4h7.2" stroke="currentColor" stroke-width="1.5"/>',
+    },
+    bizjet: {
+      label: 'Business jet', size: 19,
+      svg: '<path d="M12 3l1.4 6.3 6.6 2.9v1.7l-6.6-1.1v4.7l2.3 1.7v1.4L12 19.7l-3.7 1v-1.4l2.3-1.7v-4.7L4 13.9v-1.7l6.6-2.9z"/>',
+    },
+    light: {
+      label: 'Light aircraft', size: 18,
+      // High wing, fixed gear: the shape of a trainer.
+      svg: '<path d="M11.2 3h1.6l.6 5H21v2h-7.6v5.4l2.2 1.6v1.4L12 17.6l-3.6 1.8v-1.4l2.2-1.6V10H3V8h7.6z"/>',
+    },
+    helicopter: {
+      label: 'Helicopter', size: 22,
+      // The rotor is a separate element so it can turn.
+      svg: '<path d="M10.6 7.4h2.8v6.1l6.3 3.1v1.7l-6.3-1.3v2.6h2v1.4H9v-1.4h1.6v-2.6l-6.3 1.3v-1.7l6.3-3.1z"/>'
+        + '<g class="rotor"><path d="M3.4 6.2h17.2" stroke="currentColor" stroke-width="1.6"/></g>'
+        + '<circle cx="12" cy="6.2" r="1.1"/>',
+    },
+    glider: {
+      label: 'Glider', size: 22,
+      svg: '<path d="M11.4 3h1.2l.5 7H23v1.6h-9.9v5.9l2 1.5v1.3L12 19.4l-3.1.9v-1.3l2-1.5v-5.9H1V10h9.9z"/>',
+    },
+    balloon: {
+      label: 'Balloon or airship', size: 20,
+      svg: '<path d="M12 2a6.4 6.4 0 0 1 6.4 6.4c0 3.6-3.4 6.4-5.2 8.2h-2.4C9 14.8 5.6 12 5.6 8.4A6.4 6.4 0 0 1 12 2z"/>'
+        + '<rect x="10.1" y="17.4" width="3.8" height="3.4" rx=".7"/>',
+    },
+    drone: {
+      label: 'Drone', size: 18,
+      svg: '<circle cx="12" cy="12" r="2.6"/><path d="M6.4 6.4l3.2 3.2M17.6 6.4l-3.2 3.2M6.4 17.6l3.2-3.2M17.6 17.6l-3.2-3.2"'
+        + ' stroke="currentColor" stroke-width="1.6"/>'
+        + '<circle cx="5.2" cy="5.2" r="2"/><circle cx="18.8" cy="5.2" r="2"/>'
+        + '<circle cx="5.2" cy="18.8" r="2"/><circle cx="18.8" cy="18.8" r="2"/>',
+    },
+    ground: {
+      label: 'Ground vehicle', size: 15,
+      svg: '<rect x="4" y="9" width="16" height="7" rx="1.6"/><circle cx="8" cy="17.6" r="1.6"/><circle cx="16" cy="17.6" r="1.6"/>',
+    },
+    unknown: {
+      label: 'Unidentified', size: 16,
+      svg: '<circle cx="12" cy="12" r="5"/>',
+    },
+  };
+
+  /** ADS-B emitter category, then the type code, then give up honestly. */
+  function classifyKind(a) {
+    const cat = String(a.category || '').toUpperCase();
+    const type = String(a.t || '').toUpperCase();
+
+    if (cat === 'A7' || HELI_TYPE.test(type)) return 'helicopter';
+    if (cat === 'B1') return 'glider';
+    if (cat === 'B2') return 'balloon';
+    if (cat === 'B6') return 'drone';
+    if (cat === 'B4' || cat === 'B3') return 'light';
+    if (cat.startsWith('C')) return 'ground';
+
+    if (TURBOPROP_TYPE.test(type)) return 'turboprop';
+    if (BIZJET_TYPE.test(type)) return 'bizjet';
+    if (LIGHT_TYPE.test(type)) return 'light';
+    if (cat === 'A5' || cat === 'A4') return 'heavy';
+    if (cat === 'A3') return 'airliner';
+    if (cat === 'A2') return 'airliner';
+    if (cat === 'A1') return 'light';
+    return type ? 'airliner' : 'unknown';       // a type code but no category: almost always an airliner
+  }
+
   /* ------------------- military and state aircraft over India ------------------- */
 
   /**
@@ -412,9 +522,12 @@
     };
   }
 
-  /** A plane pointing where it is going, rather than an emoji that cannot. */
-  const PLANE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">'
-    + '<path d="M12 2l2 7 7 3v2l-7-1.2V19l3 2v1l-5-1.6L7 22v-1l3-2v-6.2L3 14v-2l7-3z"/></svg>';
+  /** The silhouette for a class, at its own size. */
+  const aircraftSvg = (kind) => {
+    const def = AIRCRAFT_CLASSES[kind] || AIRCRAFT_CLASSES.unknown;
+    return `<svg viewBox="0 0 24 24" width="${def.size}" height="${def.size}" fill="currentColor"`
+      + ` stroke="none" aria-hidden="true">${def.svg}</svg>`;
+  };
 
   /* --------------------- aircraft route and airframe --------------------- */
 

@@ -165,9 +165,23 @@ window.SMX = (function () {
   .smx-flow-3 { animation-duration: 5s; }
   .smx-flow-4 { animation-duration: 2.8s; animation-direction: reverse; }
 
+  /* ---- aircraft, told apart by silhouette ---- */
+  /* One colour for all civil traffic: the shape is what classifies it. */
+  .smx-live-dot.smx-ac svg { color:#e6edf5; filter: drop-shadow(0 1px 2px rgba(0,0,0,.85)); }
+  .smx-live-dot.smx-ac .glyph { display:grid; place-items:center; width:100%; height:100%; }
+  /* Only two things move, and both earn it. */
+  .smx-live-dot.smx-ac-helicopter .rotor { transform-origin:12px 6.2px; animation: smx-rotor 1.1s linear infinite; }
+  @keyframes smx-rotor { to { transform: rotate(360deg); } }
+  .smx-live-dot.smx-ac-drone svg { animation: smx-drone 1.8s ease-in-out infinite; }
+  @keyframes smx-drone { 0%,100% { opacity:.75; } 50% { opacity:1; } }
+  /* On the ground: still there, no longer shouting. */
+  .smx-live-dot.smx-ac-parked svg { color:#8b98a8; filter:none; opacity:.75; }
+  .smx-live-dot.smx-ac-parked::after { display:none; }
+
   /* A military or state aircraft: its own mark, glowing, unmistakable among airliners. */
   .smx-live-dot.smx-mil .glyph { width:26px; height:26px; line-height:26px; }
-  .smx-live-dot.smx-mil svg { fill:#00e676; filter: drop-shadow(0 0 5px #00e676) drop-shadow(0 0 1px #000); }
+  .smx-live-dot.smx-mil svg { color:#00e676; fill:#00e676;
+                              filter: drop-shadow(0 0 5px #00e676) drop-shadow(0 0 1px #000); }
   .smx-live-dot.smx-mil::after { content:''; position:absolute; inset:-4px; border-radius:50%;
                                  border:1.5px solid rgba(0,230,118,.75); animation: smx-mil 2.2s infinite; }
   @keyframes smx-mil {

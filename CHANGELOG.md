@@ -115,6 +115,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - **Saved history.** Every fix is stored with its timestamp and the look angles
     that were true then, survives closing the tool, and exports as GPX, CSV or
     JSON. Deleting a history is a separate, deliberate act.
+  - **Aircraft are told apart by silhouette, not colour.** Heavy jet, airliner,
+    turboprop, business jet, light aircraft, helicopter, glider, balloon, drone,
+    ground vehicle — each has its own outline and size, read from the ADS-B emitter
+    category and falling back to the ICAO type code, which in practice is the more
+    reliable of the two: plenty of airliners transmit "no information". Colour in
+    this map already means something, so shape carries the class and the popup
+    names it in words alongside the feed's own description. Only two things move —
+    a helicopter's rotor turns and a drone breathes — and traffic on the ground is
+    dimmed rather than hidden. Nothing to go on is reported as unidentified rather
+    than guessed.
   - **Military and Indian state aircraft stand out**: a green glowing aeroplane
     that points where it is flying, larger than the rest, with a trail behind it
     whether or not it is being tracked. Identified from three independent signals —

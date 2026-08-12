@@ -1403,6 +1403,89 @@ describe("direction shown on the track line", () => {
   });
 });
 
+describe("telling aircraft apart", () => {
+  /** One of each, as the feed presents them. */
+  const MIXED = () => ({
+    now: 1786532847002,
+    ac: [
+      { hex: "c1", flight: "AIC101", t: "A21N", category: "A3", lat: 12.99, lon: 77.6, gs: 400, track: 90, alt_baro: 30000 },
+      { hex: "c2", flight: "AIC202", t: "B789", category: "A5", lat: 13.0, lon: 77.6, gs: 460, track: 90, alt_baro: 35000 },
+      { hex: "c3", flight: "IGO303", t: "AT76", category: "A0", lat: 13.1, lon: 77.6, gs: 240, track: 90, alt_baro: 15000 },
+      { hex: "c4", flight: "VTXYZ", t: "B429", category: "A7", lat: 13.2, lon: 77.6, gs: 120, track: 90, alt_baro: 2000 },
+      { hex: "c5", flight: "NETJET", t: "GL7T", category: "A3", lat: 13.3, lon: 77.6, gs: 430, track: 90, alt_baro: 41000 },
+      { hex: "c6", flight: "TRAIN1", t: "C172", category: "A1", lat: 13.4, lon: 77.6, gs: 90, track: 90, alt_baro: 4000 },
+      { hex: "c7", flight: "GLIDE1", t: "GLID", category: "B1", lat: 13.5, lon: 77.6, gs: 50, track: 90, alt_baro: 6000 },
+      { hex: "c8", flight: "UAV001", t: "SUAV", category: "B6", lat: 13.6, lon: 77.6, gs: 40, track: 90, alt_baro: 1200 },
+      { hex: "c9", flight: "BALL01", t: "BALL", category: "B2", lat: 13.7, lon: 77.6, gs: 10, track: 90, alt_baro: 3000 },
+      { hex: "ca", flight: "PUSH12", t: "TUG", category: "C2", lat: 13.8, lon: 77.6, gs: 5, track: 90, alt_baro: "ground" },
+      { hex: "cb", flight: "MYSTERY", lat: 13.9, lon: 77.6, gs: 200, track: 90, alt_baro: 20000 },
+      { hex: "cc", flight: "NOCAT1", t: "B738", lat: 14.0, lon: 77.6, gs: 420, track: 90, alt_baro: 33000 },
+    ],
+  });
+
+  let civil: any;
+  beforeEach(() => { civil = fixtures.aircraft; fixtures.aircraft = MIXED(); });
+  afterEach(async () => { fixtures.aircraft = civil; await live().setLayer("aircraft", false); });
+
+  const kinds = async () => {
+    const st = await load("aircraft");
+    return Object.fromEntries(st.items.map((i: any) => [i.id, i]));
+  };
+
+  it("reads the emitter category first: rotorcraft, glider, drone, balloon, ground", async () => {
+    const k = await kinds();
+    expect(k.c4.kind).toBe("helicopter");
+    expect(k.c7.kind).toBe("glider");
+    expect(k.c8.kind).toBe("drone");
+    expect(k.c9.kind).toBe("balloon");
+    expect(k.ca.kind).toBe("ground");
+  });
+
+  it("separates heavy from ordinary airliners", async () => {
+    const k = await kinds();
+    expect(k.c2.kind).toBe("heavy");             // 787-9, category A5
+    expect(k.c1.kind).toBe("airliner");          // A321neo, category A3
+    expect(k.c2.iconSize).toBeGreaterThan(k.c1.iconSize);
+  });
+
+  it("falls back to the type code when the category is useless", async () => {
+    const k = await kinds();
+    // An ATR 72 transmitting A0 "no information" is still a turboprop.
+    expect(k.c3.kind).toBe("turboprop");
+    expect(k.c5.kind).toBe("bizjet");            // Global 7500 inside an A3 category
+    expect(k.c6.kind).toBe("light");
+    expect(k.cc.kind).toBe("airliner");          // a 737 with no category is still an airliner
+    expect(k.cb.kind).toBe("unknown");           // nothing to go on: say so rather than guess
+    expect(k.cb.kindLabel).toBe("Unidentified");
+  });
+
+  it("names the class in words, and repeats the feed's own description", async () => {
+    const k = await kinds();
+    expect(k.c4.kindLabel).toBe("Helicopter");
+    expect(k.c4.detail).toContain("<small>class</small>");
+    expect(k.c4.detail).toContain("Helicopter");
+  });
+
+  it("gives each class its own silhouette and size, not its own colour", async () => {
+    const k = await kinds();
+    const shapes = new Set(["c1", "c2", "c3", "c4", "c7", "c8", "c9", "ca", "cb"].map((id) => k[id].iconHtml));
+    expect(shapes.size).toBe(9);                 // nine distinct outlines
+    for (const id of ["c1", "c2", "c3", "c7"]) {
+      expect(k[id].iconClass).toContain("smx-ac-");
+      expect(k[id].iconHtml).toContain("<svg");
+      expect(k[id].iconHtml).not.toContain("#");  // no colour of its own
+    }
+  });
+
+  it("moves only the rotor and the drone, and dims what is parked", async () => {
+    const k = await kinds();
+    expect(k.c4.iconHtml).toContain('class="rotor"');   // the only spinning part
+    expect(k.c1.iconHtml).not.toContain("rotor");
+    expect(k.ca.iconClass).toContain("smx-ac-parked");
+    expect(k.c1.iconClass).not.toContain("parked");
+  });
+});
+
 describe("how old a fix is", () => {
   it("carries the feed's own clock rather than assuming every fix is now", async () => {
     const st = await load("aircraft");
@@ -1607,7 +1690,8 @@ describe("military and state aircraft", () => {
   it("gives them their own green mark, larger and pointing where they fly", async () => {
     const st = await load("aircraft");
     const iaf = byId(st, "8002f7");
-    expect(iaf.iconClass).toBe("smx-mil");
+    expect(iaf.iconClass).toContain("smx-mil");
+    expect(iaf.iconClass).toContain("smx-ac");
     expect(iaf.iconSize).toBe(26);
     expect(iaf.iconHtml).toContain("<svg");                  // a plane, not an emoji
     expect(iaf.detail).toContain("Indian Air Force");
