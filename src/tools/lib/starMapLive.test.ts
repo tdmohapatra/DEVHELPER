@@ -187,6 +187,24 @@ const fixtures: Record<string, any> = {
         pollutant_id: "PM2.5", min_value: "10", max_value: "12", avg_value: "11" },
     ],
   },
+  adsbdbRoute: {
+    response: {
+      flightroute: {
+        callsign: "AI101", callsign_iata: "AI101",
+        airline: { name: "Air India", icao: "AIC", iata: "AI" },
+        origin: { iata_code: "BLR", icao_code: "VOBL", municipality: "Bangalore",
+          name: "Kempegowda International", latitude: 13.1979, longitude: 77.7063 },
+        destination: { iata_code: "DEL", icao_code: "VIDP", municipality: "New Delhi",
+          name: "Indira Gandhi International", latitude: 28.5665, longitude: 77.1031 },
+      },
+    },
+  },
+  adsbdbFrame: {
+    response: { aircraft: { registration: "VT-RTJ", type: "A320-251N", icao_type: "A20N",
+      manufacturer: "Airbus", registered_owner: "Air India" } },
+  },
+  hexdbFrame: { Registration: "VT-BWF", Type: "737MAX 8", ICAOTypeCode: "B38M",
+    Manufacturer: "Boeing", RegisteredOwners: "Air India Express" },
   probes: {
     results: [
       { id: 1001, geometry: { coordinates: [77.6, 12.98] }, status: { name: "Connected" }, asn_v4: 24560, country_code: "IN", is_anchor: false },
@@ -207,6 +225,9 @@ const fetchMock = vi.fn(async (url: string, init?: any) => {
     : u.includes("marine-api") ? fixtures.marine
     : u.includes("api.nasa.gov") ? fixtures.neows
     : u.includes("thespacedevs") ? fixtures.launches
+    : u.includes("adsbdb.com/v0/callsign/") ? (u.includes("AI101") ? fixtures.adsbdbRoute : { response: "unknown callsign" })
+    : u.includes("adsbdb.com/v0/aircraft/") ? (u.includes("abc123") ? fixtures.adsbdbFrame : { response: "unknown aircraft" })
+    : u.includes("hexdb.io/api/v1/aircraft/") ? fixtures.hexdbFrame
     : u.includes("api.data.gov.in") ? (u.includes("offset=0") ? fixtures.cpcb : { records: [] })
     : u.includes("atlas.ripe.net") ? fixtures.probes
     : {};
@@ -1374,6 +1395,119 @@ describe("direction shown on the track line", () => {
     expect(track.trail._map).toBeNull();
     expect(track.glow._map).toBeNull();
     expect(track.flow._map).toBeNull();
+    await live().setLayer("aircraft", false);
+  });
+});
+
+describe("aircraft route and airframe", () => {
+  const aircraftLayer = () => live().layers.find((l: any) => l.id === "aircraft");
+
+  beforeEach(() => {
+    live().stopTracking();
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+  });
+
+  it("looks up where it is flying from and to, since ADS-B carries no route", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];                              // callsign AI101
+    expect(await live().enrichItem(aircraftLayer(), plane)).toBe(true);
+
+    expect(plane.route.airline.name).toBe("Air India");
+    expect(plane.routeLine).toContain("BLR");
+    expect(plane.routeLine).toContain("Bangalore");
+    expect(plane.routeLine).toContain("DEL");
+    expect(plane.routeLine).toContain("New Delhi");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("works out what the route implies: distance left, how far flown, and an ETA", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    await live().enrichItem(aircraftLayer(), plane);
+
+    const g = plane.routeGeometry;
+    const M = SMX().Mx;
+    const whole = M.haversine({ lat: 13.1979, lng: 77.7063 }, { lat: 28.5665, lng: 77.1031 });
+    expect(g.total).toBeCloseTo(whole, 0);
+    // The aircraft sits at 12.99 N, barely off Bengaluru, so almost nothing is flown.
+    expect(g.left).toBeGreaterThan(whole * 0.95);
+    expect(g.progress).toBeLessThan(0.05);
+    expect(g.bearingTo).toBeGreaterThan(300);               // roughly north
+    expect(g.eta).toBeCloseTo(g.left / plane.speed, 0);     // at its present ground speed
+    expect(plane.routeLine).toContain("to run");
+    expect(plane.routeLine).toContain("eta");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("lays the detail out as labelled values, not a run-on sentence", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    expect(plane.detail).toContain('class="smx-kv"');
+    expect(plane.detail).toContain("<small>altitude</small>");
+    expect(plane.detail).toContain("<small>speed</small>");
+    expect(plane.detail).toContain("climbing");
+    await live().enrichItem(aircraftLayer(), plane);
+    expect(plane.routeLine).toContain('class="smx-route"');
+    expect(plane.routeLine).toContain('class="smx-progress"');
+    await live().setLayer("aircraft", false);
+  });
+
+  it("falls back to hexdb for an airframe adsbdb has never heard of", async () => {
+    const st = await load("aircraft");
+    const other = st.items[1];                              // hex def456 → unknown to adsbdb
+    await live().enrichItem(aircraftLayer(), other);
+    expect(other.aircraftLine).toContain("VT-BWF");
+    expect(other.aircraftLine).toContain("737MAX 8");
+    expect(other.aircraftLine).toContain("Air India Express");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("says so plainly when a callsign has no route on file", async () => {
+    const st = await load("aircraft");
+    const other = st.items[1];                              // callsign 6E202 → unknown
+    await live().enrichItem(aircraftLayer(), other);
+    expect(other.routeGeometry).toBeUndefined();
+    expect(other.routeLine).toContain("No route listed");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("asks once per aircraft, then answers from its cache", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    await live().enrichItem(aircraftLayer(), plane);
+    const asked = fetchMock.mock.calls.filter((c) => String(c[0]).includes("adsbdb")).length;
+    expect(asked).toBeGreaterThan(0);
+
+    plane.enriched = false;                                 // ask again
+    fetchMock.mockClear();
+    await live().enrichItem(aircraftLayer(), plane);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("adsbdb"))).toHaveLength(0);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("keeps a known route across a refresh instead of asking again", async () => {
+    const st = await load("aircraft");
+    await live().enrichItem(aircraftLayer(), st.items[0]);
+    expect(st.items[0].routeLine).toContain("BLR");
+
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => !stateOf("aircraft").busy, { timeout: 5000 });
+    const after = stateOf("aircraft").items.find((i: any) => i.id === "abc123");
+    expect(after.enriched).toBe(true);
+    expect(after.routeLine).toContain("BLR");
+    expect(after.routeGeometry).toBeTruthy();
+    await live().setLayer("aircraft", false);
+  });
+
+  it("shows the route on the tracking card and in the line's hover text", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    await live().enrichItem(aircraftLayer(), plane);
+    const track = live().startTracking("aircraft", plane.id);
+    live().updateTracks();
+    expect($("#smxTracked")!.textContent).toContain("BLR");
+    expect($("#smxTracked")!.textContent).toContain("VT-RTJ");
+    expect(live().hoverInfo(track, null)).toContain("BLR");
     await live().setLayer("aircraft", false);
   });
 });

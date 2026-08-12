@@ -219,6 +219,7 @@
     // Aircraft carry their own lights, so darkness and sunlight do not matter —
     // but past about 30 km even a jet is a speck you will not pick out.
     visibility: { needsDarkness: false, needsSunlight: false, minElevation: 3, maxRange: 30000 },
+    enrich: (item) => enrichAircraft(item),
     async load(ctx) {
       // Not OpenSky: it answers with its own origin in Access-Control-Allow-Origin,
       // so a browser blocks the response. airplanes.live sends `*` and takes a
@@ -230,6 +231,7 @@
       const data = await ctx.json(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/${radiusNm}`,
         { timeout: 25000 });
       const FT = 0.3048, KT = 0.514444;
+      const previous = new Map((ctx.state.items || []).map((i) => [i.id, i]));
       const items = (data.ac || []).map((a) => {
         if (!Number.isFinite(a.lat) || !Number.isFinite(a.lon)) return null;
         const onGround = a.alt_baro === 'ground';
@@ -243,11 +245,23 @@
           speed,
           heading: Number.isFinite(a.track) ? a.track : null,
           glyph: '✈️',
-          detail: `${X.esc(a.t || 'unknown type')}`
-            + `${onGround ? ' · on the ground' : altM !== null ? ` · ${Math.round(altM)} m` : ''}`
-            + `${speed !== null ? ` · ${Math.round(speed * 3.6)} km/h` : ''}`
-            + `${Number.isFinite(a.baro_rate) && Math.abs(a.baro_rate) > 100 ? ` · ${a.baro_rate > 0 ? 'climbing' : 'descending'}` : ''}`
-            + `${a.squawk ? ` · squawk ${X.esc(a.squawk)}` : ''}`,
+          // Route and airframe are already known for an aeroplane we have seen.
+          ...(() => {
+            const was = previous.get(a.hex);
+            return was && was.enriched
+              ? { enriched: true, route: was.route, routeLine: was.routeLine, routeGeometry: was.routeGeometry,
+                  airframe: was.airframe, aircraftLine: was.aircraftLine, extra: was.extra }
+              : {};
+          })(),
+          detail: X.kv([
+            ['type', X.esc(a.t || '—')],
+            ['altitude', onGround ? 'on the ground' : altM !== null ? `${Math.round(altM).toLocaleString()} m` : null],
+            ['speed', speed !== null ? `${Math.round(speed * 3.6)} km/h` : null],
+            ['track', Number.isFinite(a.track) ? `${Mx.compass(a.track)} ${Math.round(a.track)}°` : null],
+            ['vertical', Number.isFinite(a.baro_rate) && Math.abs(a.baro_rate) > 100
+              ? (a.baro_rate > 0 ? 'climbing' : 'descending') : null],
+            ['squawk', a.squawk ? X.esc(a.squawk) : null],
+          ]),
         };
       }).filter(Boolean);
       return { items, note: `${radiusNm} nm around the view centre` };
@@ -267,6 +281,146 @@
       },
     },
   });
+
+  /* --------------------- aircraft route and airframe --------------------- */
+
+  /**
+   * ADS-B carries no route: a transponder broadcasts a callsign, not "Bengaluru
+   * to Goa". The route and the airframe come from adsbdb, a free, key-less
+   * database keyed by callsign and by Mode S address.
+   *
+   * Cached hard, because these barely change: a route for half a day, an
+   * airframe for a week, and a miss for an hour so an unlisted callsign is not
+   * asked about on every popup.
+   */
+  const adsbCache = new Map();
+  const ROUTE_TTL = 12 * 3600 * 1000;
+  const AIRFRAME_TTL = 7 * 24 * 3600 * 1000;
+  const MISS_TTL = 3600 * 1000;
+
+  async function adsbdb(kind, value, ttl) {
+    const key = `${kind}:${value}`;
+    const hit = adsbCache.get(key);
+    if (hit && Date.now() - hit.at < (hit.data ? ttl : MISS_TTL)) return hit.data;
+    let data = null;
+    try {
+      const res = await fetch(`https://api.adsbdb.com/v0/${kind}/${encodeURIComponent(value)}`);
+      if (res.ok) {
+        const body = await res.json();
+        data = (body && body.response) || null;
+        if (data === 'unknown callsign' || data === 'unknown aircraft') data = null;
+      }
+    } catch (_) {
+      data = null;
+    }
+    adsbCache.set(key, { at: Date.now(), data });
+    return data;
+  }
+
+  /**
+   * The route, laid out rather than written out: airport codes either side of an
+   * arrow, then the numbers that follow from them in one row of labelled values,
+   * and a hairline bar for how much of the leg is behind it.
+   */
+  function routeBlock(fr, item) {
+    const g = item.routeGeometry;
+    const end = (a) => `<span><span class="code">${X.esc((a && (a.iata_code || a.icao_code)) || '???')}</span>`
+      + `<span class="place"> ${X.esc((a && (a.municipality || a.name)) || '')}</span></span>`;
+    return `<div class="smx-route">${end(fr.origin)}<span class="arrow">→</span>${end(fr.destination)}</div>`
+      + `${fr.airline && fr.airline.name ? `<div class="smx-meta">${X.esc(fr.airline.name)}</div>` : ''}`
+      + (g ? `<div class="smx-progress"><span style="width:${Math.round(Mx.clamp(g.progress || 0, 0, 1) * 100)}%"></span></div>`
+        + X.kv([
+          ['to run', X.dist(g.left)],
+          ['flown', g.progress !== null ? `${Math.round(g.progress * 100)}%` : null],
+          ['heading', `${Mx.compass(g.bearingTo)} ${Math.round(g.bearingTo)}°`],
+          ['eta', g.eta ? Mx.dur(g.eta) : null],
+        ]) : '');
+  }
+
+  /** Second opinion on an airframe, when adsbdb has never heard of it. */
+  async function hexdbAircraft(hex) {
+    const key = `hexdb:${hex}`;
+    const hit = adsbCache.get(key);
+    if (hit && Date.now() - hit.at < (hit.data ? AIRFRAME_TTL : MISS_TTL)) return hit.data;
+    let data = null;
+    try {
+      const res = await fetch(`https://hexdb.io/api/v1/aircraft/${encodeURIComponent(hex)}`);
+      if (res.ok) {
+        const body = await res.json();
+        if (body && body.Registration) data = body;
+      }
+    } catch (_) {
+      data = null;
+    }
+    adsbCache.set(key, { at: Date.now(), data });
+    return data;
+  }
+
+  const airportLabel = (a) => (a
+    ? `${X.esc(a.iata_code || a.icao_code || '?')} ${X.esc(a.municipality || a.name || '')}`.trim()
+    : 'unknown');
+
+  /**
+   * Fill in an aircraft's route, its airframe, and what the route implies: how
+   * far it still has to fly, which way, and when it arrives at its present
+   * ground speed. The distances come from our own geodesy rather than the feed,
+   * so they are consistent with every other distance in the tool.
+   */
+  async function enrichAircraft(item) {
+    if (item.enriched) return false;
+    item.enriched = true;                     // one attempt per fix, cache does the rest
+
+    const [route, frame] = await Promise.all([
+      item.label && /^[A-Z0-9]{3,8}$/i.test(item.label) ? adsbdb('callsign', item.label, ROUTE_TTL) : null,
+      item.id ? adsbdb('aircraft', item.id, AIRFRAME_TTL) : null,
+    ]);
+
+    const fr = route && route.flightroute;
+    if (fr) {
+      item.route = fr;
+      const from = fr.origin, to = fr.destination;
+      if (from && to) {
+        const total = Mx.haversine(
+          { lat: from.latitude, lng: from.longitude }, { lat: to.latitude, lng: to.longitude },
+        );
+        const left = Mx.haversine({ lat: item.lat, lng: item.lng }, { lat: to.latitude, lng: to.longitude });
+        const flown = Math.max(0, total - left);
+        const bearingTo = Mx.bearing({ lat: item.lat, lng: item.lng }, { lat: to.latitude, lng: to.longitude });
+        const eta = item.speed > 20 ? left / item.speed : null;
+        item.routeGeometry = { from, to, total, left, flown, bearingTo, eta,
+          progress: total > 0 ? flown / total : null };
+      }
+      item.routeLine = routeBlock(fr, item);
+    } else if (item.label) {
+      item.routeLine = '<div class="smx-meta">No route listed for this callsign.</div>';
+    }
+
+    // adsbdb does not know every airframe — Indian registrations are patchy —
+    // so fall back to hexdb, which is also free and CORS-open.
+    let ac = frame && frame.aircraft;
+    if (!ac && item.id) {
+      const spare = await hexdbAircraft(item.id);
+      if (spare) {
+        ac = {
+          registration: spare.Registration,
+          type: spare.Type,
+          icao_type: spare.ICAOTypeCode,
+          manufacturer: spare.Manufacturer,
+          registered_owner: spare.RegisteredOwners,
+        };
+      }
+    }
+    if (ac) {
+      item.airframe = ac;
+      item.aircraftLine = `<div class="smx-meta">`
+        + [ac.registration, ac.type || ac.icao_type, ac.registered_owner, ac.manufacturer]
+          .filter(Boolean).map((part) => X.esc(part)).join(' · ')
+        + `</div>`;
+    }
+
+    item.extra = [item.routeLine, item.aircraftLine].filter(Boolean).join('');
+    return !!(item.routeLine || item.aircraftLine);
+  }
 
   /* ============================= earthquakes ============================= */
 

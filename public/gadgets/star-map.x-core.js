@@ -133,6 +133,24 @@ window.SMX = (function () {
   .smx-meet div { width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%;
                   border:2px solid #ec4899; background:rgba(236,72,153,.35); }
 
+  /* ---- structured popup / readout blocks ---- */
+  /* A label above its value, in a grid: reads as a table without drawing one. */
+  .smx-kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(64px,1fr));
+            gap:5px 10px; margin:5px 0; }
+  .smx-kv > div { min-width:0; }
+  .smx-kv b { display:block; font-size:12.5px; font-variant-numeric:tabular-nums;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .smx-kv small { display:block; font-size:9px; letter-spacing:.07em; text-transform:uppercase;
+                  color:var(--text-dim); }
+  .smx-route { display:flex; align-items:baseline; gap:7px; margin:5px 0 2px; flex-wrap:wrap; }
+  .smx-route .code { font-size:15px; font-weight:800; letter-spacing:.02em; }
+  .smx-route .place { font-size:10.5px; color:var(--text-dim); }
+  .smx-route .arrow { color:var(--text-dim); font-size:13px; }
+  .smx-meta { font-size:10.5px; color:var(--text-dim); margin:3px 0 0; }
+  .smx-rule { height:1px; background:var(--border); margin:6px 0; border:0; }
+  .smx-progress { height:3px; border-radius:2px; background:var(--surface-2); overflow:hidden; margin:4px 0 2px; }
+  .smx-progress span { display:block; height:100%; background:var(--blue); }
+
   /* ---- live layers ---- */
   .smx-live-dot { pointer-events:auto; }
   .smx-live-dot .glyph { display:block; width:22px; height:22px; line-height:22px; text-align:center;
@@ -244,6 +262,20 @@ window.SMX = (function () {
     return `<svg class="smx-ico ${extraClass || ''}" viewBox="0 0 24 24" fill="${fill}" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
   }
+
+  /**
+   * A grid of label-and-value pairs. Values are given already formatted; empty
+   * ones are dropped rather than rendered blank, so a sparse feed does not leave
+   * holes in the layout.
+   */
+  const kv = (pairs) => {
+    const cells = pairs
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .map(([label, value]) => `<div><b>${value}</b><small>${esc(label)}</small></div>`);
+    return cells.length ? `<div class="smx-kv">${cells.join('')}</div>` : '';
+  };
+
+  const rule = () => '<hr class="smx-rule">';
 
   const spinner = (label) => `<div class="smx-hint">${icon('spinner', 'smx-spin')} ${esc(label)}</div>`;
 
@@ -939,6 +971,7 @@ window.SMX = (function () {
     Mx, el, esc, on, json, notify, throttle, icon, spinner,
     dist, speed, ele, metric, lighten,
     MODE_SHADES, MODE_LABELS, modeColor, SEVERITY, ANNOTATION, colourKey, alignAppPalette,
+    kv, rule,
     TRAFFIC_COLORS, TRAFFIC_LABELS, PANES, renderers,
     FlowRoute, route, waypoints, decorateAppRoute, clearAppRoute,
     appRouteLayer: () => appRoute,

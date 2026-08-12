@@ -18,6 +18,7 @@
        needsHome,                  disabled until a location is set
        raster,                     () => L.tileLayer — for imagery layers
        load(ctx),                  async; returns { items, note }
+       enrich(item, ctx),          async; fills in detail too costly to fetch for all
        draw(items, ctx),           puts things on ctx.group
        alert                       { label, defaults, test(item, ctx) }
      }
@@ -371,6 +372,11 @@
       });
       marker.smxItem = item;
       marker.bindPopup(() => popupHtml(ctx.layer, marker.smxItem));
+      // Anything expensive is fetched when a popup actually opens, not for every
+      // object on screen — an aircraft's route costs a request per callsign.
+      marker.on('popupopen', () => enrichItem(ctx.layer, marker.smxItem).then((changed) => {
+        if (changed && marker.isPopupOpen()) marker.setPopupContent(popupHtml(ctx.layer, marker.smxItem));
+      }));
       marker.addTo(ctx.group);
       state.markers.set(key, marker);
     }
@@ -381,6 +387,20 @@
       // markers that are no longer anywhere.
       ctx.group.removeLayer(marker);
       state.markers.delete(key);
+    }
+  }
+
+  /**
+   * Ask a layer to fill in detail for one item. Resolves true when something new
+   * arrived, so a caller can redraw. Failures are swallowed: enrichment is a
+   * bonus, never the reason a popup is empty.
+   */
+  async function enrichItem(layer, item) {
+    if (!layer || !item || typeof layer.enrich !== 'function') return false;
+    try {
+      return !!(await layer.enrich(item, context(layer)));
+    } catch (_) {
+      return false;
     }
   }
 
@@ -398,6 +418,7 @@
     const d = distanceToHome(item);
     return `<b>${layer.emoji} ${X.esc(item.label || item.id)}</b>
       ${item.detail ? `<div style="margin-top:4px">${item.detail}</div>` : ''}
+      ${item.extra ? `<div style="margin-top:4px">${item.extra}</div>` : ''}
       ${d !== null && observerPoint()
         ? `<div style="margin-top:4px">${km(d)} from ${X.esc(observerPoint().label || 'your location')}</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:6px">
@@ -538,6 +559,7 @@
 
   /** What was true at the recorded fix nearest the pointer. */
   function hoverInfo(track, latlng) {
+    const item = trackedItem(track);
     if (!track.points.length) return X.esc(track.label);
     let fix = track.points[track.points.length - 1];
     if (latlng) {
@@ -553,6 +575,7 @@
       + `${fix.alt !== null && fix.alt !== undefined ? `<br>${(fix.alt / 1000).toFixed(fix.alt > 10000 ? 0 : 1)} km up` : ''}`
       + `${fix.spd ? ` · ${Math.round(fix.spd * 3.6)} km/h` : ''}`
       + `${fix.rng ? `<br>${km(fix.rng)} from you, ${Mx.compass(fix.az)} at ${Math.round(fix.el)}°` : ''}`
+      + `${item && item.routeLine ? `<br>${item.routeLine}` : ''}`
       + `<br><small>${track.points.length} fixes · hover the line to read any moment</small>`;
   }
 
@@ -614,6 +637,10 @@
   function updateTrack(track) {
     const item = trackedItem(track);
     if (!item || !Number.isFinite(item.lat)) return;
+    const layer0 = live.layers.find((l) => l.id === track.layerId);
+    if (layer0 && typeof layer0.enrich === 'function' && !item.enriched) {
+      enrichItem(layer0, item).then((changed) => { if (changed) renderTrackedReadout(); });
+    }
     const now = Date.now();
     const at = [item.lat, item.lng];
 
@@ -1274,6 +1301,8 @@
           <button class="smx-btn" data-track-stop="${track.key}" title="Stop tracking">${X.icon('x')}</button>
         </div>
 
+        ${item && item.routeLine ? `<div class="smx-hint" style="margin:2px 0">${item.routeLine}</div>` : ''}
+        ${item && item.aircraftLine ? `<div class="smx-hint" style="margin:0">${item.aircraftLine}</div>` : ''}
         ${!item ? `<div class="smx-hint smx-warn">Not in the latest data — it left the feed or the view.
           Everything below is its last fix, ${ago(track.points.length ? track.points[track.points.length - 1].t : 0)}.</div>` : ''}
 
@@ -1459,7 +1488,7 @@
     state: live,
     get tracks() { return live.tracks; },
     trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks, haveObserver,
-    setKey, keyFor,
+    setKey, keyFor, enrichItem,
     refreshMarker,
     setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo, setTrackPath,
     drawGpsLines, observerPoint, gpsFix,

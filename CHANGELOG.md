@@ -115,6 +115,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - **Saved history.** Every fix is stored with its timestamp and the look angles
     that were true then, survives closing the tool, and exports as GPX, CSV or
     JSON. Deleting a history is a separate, deliberate act.
+  - **Where a flight is going.** ADS-B carries a callsign, not a route, so the
+    origin and destination come from adsbdb (free, no key) and the airframe falls
+    back to hexdb when adsbdb has never heard of it. From those the tool works out
+    what they imply: distance still to run, how much of the leg is behind it,
+    heading to the destination and an arrival time at the present ground speed —
+    computed with our own geodesy, so it agrees with every other distance shown.
+    Looked up when a popup opens or an object is tracked, cached per callsign, and
+    carried across refreshes. A callsign with nothing on file says so.
+  - **Detail laid out, not written out.** Values sit under short labels in a grid
+    with tabular figures, the route shows airport codes either side of an arrow,
+    and a hairline bar carries the progress — one hairline rule, no nested boxes.
   - **Direction, shown not stated.** Each tracked line carries a blurred pulsing
     glow and dashes crawling towards the object, and every track gets its own dash
     pattern and rhythm — so two tracks side by side are never the same animation.
