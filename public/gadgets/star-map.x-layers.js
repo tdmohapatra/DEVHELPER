@@ -622,6 +622,173 @@
     },
   });
 
+  /* ============================= active fires ============================= */
+
+  live.register({
+    id: 'fires',
+    label: 'Active fires',
+    emoji: '🔥',
+    hint: 'NASA GIBS VIIRS thermal anomalies — today, about three hours behind the satellite',
+    attribution: '<a href="https://earthdata.nasa.gov">NASA GIBS</a> / VIIRS',
+    every: 1800,
+    raster: () => tiles(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_Thermal_Anomalies_375m_All/default/'
+      + `${isoDay(0)}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`,
+      {
+        // Level8 is the deepest matrix this layer publishes; beyond it the tiles
+        // are upscaled rather than requested and refused.
+        pane: live.rasterPane, maxZoom: 19, maxNativeZoom: 8, opacity: 0.9,
+        attribution: '<a href="https://earthdata.nasa.gov">NASA GIBS</a>',
+      },
+    ),
+    async load() {
+      return {
+        items: [],
+        note: `${isoDay(0)} · detections, not points — per-fire detail needs a free FIRMS key`,
+      };
+    },
+  });
+
+  /* ========================== air quality (India) ========================== */
+
+  // CPCB publishes one row per pollutant per station, so a station's full
+  // picture has to be assembled from several rows.
+  const CPCB_RESOURCE = '3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69';
+
+  /**
+   * PM2.5 bands from CPCB's own national AQI breakpoints, in µg/m³:
+   * good, satisfactory, moderate, poor, very poor and severe. Five colours from
+   * the severity ramp cover six bands, so the last two share the darkest.
+   */
+  const PM25_BANDS = [30, 60, 90, 120, 250];
+  const pm25Band = (v) => {
+    for (let i = 0; i < PM25_BANDS.length; i++) if (v <= PM25_BANDS[i]) return i;
+    return PM25_BANDS.length - 1;
+  };
+  const PM25_WORDS = ['good', 'satisfactory', 'moderate', 'poor', 'very poor'];
+
+  /** A coordinate, or null for the blanks and rubbish the feed contains. */
+  function coord(value, limit) {
+    const text = String(value === undefined || value === null ? '' : value).trim();
+    if (!text) return null;
+    const n = Number(text);
+    return Number.isFinite(n) && Math.abs(n) <= limit ? n : null;
+  }
+
+  /** "12-08-2026 14:00:00" — CPCB's own order, day first. */
+  function cpcbTime(text) {
+    const m = /^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})/.exec(String(text || ''));
+    if (!m) return null;
+    return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]));
+  }
+
+  live.register({
+    id: 'cpcb-aqi',
+    label: 'Air quality (India)',
+    emoji: '💨',
+    hint: 'CPCB continuous monitoring stations, through data.gov.in',
+    attribution: 'CPCB via <a href="https://data.gov.in">data.gov.in</a>',
+    every: 900,                       // the stations themselves report hourly
+    needsKey: {
+      id: 'datagovin',
+      label: 'data.gov.in API key',
+      hint: 'Register free at data.gov.in and paste the key here. The shared sample key '
+        + 'everyone uses is permanently rate-limited, so it cannot be the default.',
+    },
+    async load(ctx) {
+      const PAGE = 1000;
+      const rows = [];
+      // Roughly 3,600 rows nationally; four pages covers it with room to spare.
+      for (let page = 0; page < 4; page++) {
+        const url = `https://api.data.gov.in/resource/${CPCB_RESOURCE}`
+          + `?api-key=${encodeURIComponent(ctx.key)}&format=json&limit=${PAGE}&offset=${page * PAGE}`;
+        const data = await ctx.json(url, { timeout: 25000 });
+        if (data && data.error) throw new Error(String(data.error));
+        const batch = (data && data.records) || [];
+        rows.push(...batch);
+        if (batch.length < PAGE) break;
+      }
+      if (!rows.length) throw new Error('no records returned');
+
+      // One item per station, carrying every pollutant that station reported.
+      const stations = new Map();
+      for (const r of rows) {
+        const lat = coord(r.latitude, 90), lng = coord(r.longitude, 180);
+        // Not Number() alone: the feed ships stations with blank coordinates, and
+        // Number('') is 0 — which would plot them in the Gulf of Guinea.
+        if (lat === null || lng === null || (lat === 0 && lng === 0)) continue;
+        const id = `${r.station}|${lat.toFixed(4)},${lng.toFixed(4)}`;
+        let station = stations.get(id);
+        if (!station) {
+          station = {
+            id,
+            label: r.station || r.city || 'Station',
+            lat, lng, glyph: '💨',
+            city: r.city, state: r.state,
+            at: cpcbTime(r.last_update),
+            pollutants: {},
+          };
+          stations.set(id, station);
+        }
+        const value = Number(r.avg_value);
+        if (r.pollutant_id && Number.isFinite(value)) station.pollutants[String(r.pollutant_id).toUpperCase()] = value;
+      }
+
+      const items = [...stations.values()].map((st) => {
+        const pm25 = st.pollutants.PM2_5 !== undefined ? st.pollutants.PM2_5 : st.pollutants['PM2.5'];
+        const worst = Number.isFinite(pm25) ? pm25 : st.pollutants.PM10;
+        const band = Number.isFinite(worst) ? pm25Band(worst) : null;
+        const listed = Object.entries(st.pollutants)
+          .map(([k, v]) => `${X.esc(k.replace('PM2_5', 'PM2.5'))} ${v}`).join(' · ');
+        return Object.assign(st, {
+          pm25: Number.isFinite(pm25) ? pm25 : null,
+          worst: Number.isFinite(worst) ? worst : null,
+          band,
+          detail: `${X.esc([st.city, st.state].filter(Boolean).join(', '))}`
+            + `${band !== null ? `<br><b>${PM25_WORDS[band]}</b> — ${Number.isFinite(pm25) ? 'PM2.5' : 'PM10'} ${Math.round(worst)} µg/m³` : ''}`
+            + `${listed ? `<br>${listed} µg/m³` : ''}`
+            + `${st.at ? `<br>reported ${st.at.toLocaleTimeString()}` : ''}`,
+        });
+      });
+
+      const withPm = items.filter((i) => i.worst !== null);
+      const dirtiest = withPm.sort((a, b) => b.worst - a.worst)[0];
+      return {
+        items,
+        note: `${items.length} stations${dirtiest ? ` · worst ${dirtiest.city || dirtiest.label} ${Math.round(dirtiest.worst)} µg/m³` : ''}`,
+      };
+    },
+    draw(items, ctx) {
+      // Air quality is a severity reading, so it takes the shared severity ramp.
+      for (const item of items) {
+        L.circleMarker([item.lat, item.lng], {
+          pane: live.pane,
+          radius: item.band === null ? 4 : 5 + item.band * 1.6,
+          color: item.band === null ? 'var(--text-dim)' : X.SEVERITY[item.band],
+          weight: 1.4,
+          fillColor: item.band === null ? '#64748b' : X.SEVERITY[item.band],
+          fillOpacity: 0.4,
+        })
+          .bindPopup(`<b>💨 ${X.esc(item.label)}</b><div>${item.detail}</div>`)
+          .addTo(ctx.group);
+      }
+    },
+    alert: {
+      label: 'unhealthy air near me',
+      defaults: { minPm25: 90, maxKm: 30 },
+      fields: [
+        { key: 'minPm25', label: 'PM2.5 ≥ µg/m³', min: 30, max: 300, step: 10 },
+        { key: 'maxKm', label: 'within km', min: 2, max: 200, step: 2 },
+      ],
+      test: (item, ctx) => {
+        if (!Number.isFinite(item.worst)) return null;
+        const d = kmToHome(item);
+        if (d === null || d > ctx.settings.maxKm || item.worst < ctx.settings.minPm25) return null;
+        return `${PM25_WORDS[item.band]} air, ${Math.round(item.worst)} µg/m³, ${d.toFixed(0)} km away`;
+      },
+    },
+  });
+
   /* =========================== internet network =========================== */
 
   live.register({

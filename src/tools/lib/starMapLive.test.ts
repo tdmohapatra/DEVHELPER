@@ -164,6 +164,29 @@ const fixtures: Record<string, any> = {
       { id: "l2", name: "Electron · Test", net: new Date(Date.now() + 96 * 3600e3).toISOString(), pad: { latitude: "-39.2", longitude: "177.8", name: "LC-1" }, status: { name: "TBC" } },
     ],
   },
+  cpcb: {
+    total: 6,
+    records: [
+      { country: "India", state: "Karnataka", city: "Bengaluru", station: "BTM Layout, Bengaluru - CPCB",
+        last_update: "12-08-2026 14:00:00", latitude: "12.9135", longitude: "77.6101",
+        pollutant_id: "PM2.5", min_value: "40", max_value: "120", avg_value: "95" },
+      { country: "India", state: "Karnataka", city: "Bengaluru", station: "BTM Layout, Bengaluru - CPCB",
+        last_update: "12-08-2026 14:00:00", latitude: "12.9135", longitude: "77.6101",
+        pollutant_id: "PM10", min_value: "60", max_value: "180", avg_value: "140" },
+      { country: "India", state: "Karnataka", city: "Bengaluru", station: "BTM Layout, Bengaluru - CPCB",
+        last_update: "12-08-2026 14:00:00", latitude: "12.9135", longitude: "77.6101",
+        pollutant_id: "NO2", min_value: "9", max_value: "20", avg_value: "14" },
+      { country: "India", state: "Delhi", city: "Delhi", station: "Anand Vihar, Delhi - DPCC",
+        last_update: "12-08-2026 14:00:00", latitude: "28.6469", longitude: "77.3161",
+        pollutant_id: "PM2.5", min_value: "200", max_value: "400", avg_value: "310" },
+      { country: "India", state: "Kerala", city: "Kochi", station: "Vyttila, Kochi - KSPCB",
+        last_update: "12-08-2026 13:00:00", latitude: "9.9674", longitude: "76.3200",
+        pollutant_id: "PM10", min_value: "10", max_value: "30", avg_value: "22" },
+      { country: "India", state: "Kerala", city: "Kochi", station: "No Position, Kochi - KSPCB",
+        last_update: "12-08-2026 13:00:00", latitude: "", longitude: "",
+        pollutant_id: "PM2.5", min_value: "10", max_value: "12", avg_value: "11" },
+    ],
+  },
   probes: {
     results: [
       { id: 1001, geometry: { coordinates: [77.6, 12.98] }, status: { name: "Connected" }, asn_v4: 24560, country_code: "IN", is_anchor: false },
@@ -184,6 +207,7 @@ const fetchMock = vi.fn(async (url: string, init?: any) => {
     : u.includes("marine-api") ? fixtures.marine
     : u.includes("api.nasa.gov") ? fixtures.neows
     : u.includes("thespacedevs") ? fixtures.launches
+    : u.includes("api.data.gov.in") ? (u.includes("offset=0") ? fixtures.cpcb : { records: [] })
     : u.includes("atlas.ripe.net") ? fixtures.probes
     : {};
   return {
@@ -259,7 +283,8 @@ describe("live framework", () => {
   it("registers every layer in the order they are declared", () => {
     expect(live().layers.map((l: any) => l.id)).toEqual([
       "satellites", "aircraft", "earthquakes", "radar", "weather-alerts",
-      "transport", "places", "ocean", "asteroids", "launches", "internet", "gibs",
+      "transport", "places", "ocean", "asteroids", "launches",
+      "fires", "cpcb-aqi", "internet", "gibs",
     ]);
     expect(live().layers.every((l: any) => l.emoji && l.hint)).toBe(true);
   });
@@ -1129,13 +1154,15 @@ describe("clicking an object to track it", () => {
     const going = st.markers.get("def456");
     expect(st.group.getLayers()).toHaveLength(2);
 
-    fixtures.aircraft = { ac: [fixtures.aircraft.ac[0], fixtures.aircraft.ac[2]] };
+    const everything = fixtures.aircraft;
+    fixtures.aircraft = { ac: [everything.ac[0], everything.ac[2]] };
     await live().refresh("aircraft");
     await vi.waitUntil(() => stateOf("aircraft").items.length === 1, { timeout: 5000 });
 
     expect(st.markers.has("def456")).toBe(false);
     expect(st.group.getLayers()).toHaveLength(1);          // no stale layers left behind
     expect(st.group.getLayers()).not.toContain(going);
+    fixtures.aircraft = everything;                        // later tests need both back
     await live().setLayer("aircraft", false);
   });
 
@@ -1193,5 +1220,160 @@ describe("clicking an object to track it", () => {
     expect(() => stray.click()).not.toThrow();
     expect(live().tracks.size).toBe(0);
     stray.remove();
+  });
+});
+
+describe("active fires", () => {
+  it("adds the VIIRS raster and stops at the matrix it publishes", async () => {
+    const st = await load("fires");
+    expect(st.raster._url).toContain("VIIRS_SNPP_Thermal_Anomalies_375m_All");
+    expect(st.raster._opts.maxNativeZoom).toBe(8);
+    expect(st.note).toContain("FIRMS");                 // honest about what it is not
+    await live().setLayer("fires", false);
+    expect(stateOf("fires").raster).toBeNull();
+  });
+});
+
+describe("air quality (India)", () => {
+  beforeEach(() => {
+    live().setHome({ lat: 12.9135, lng: 77.6101 }, "Bengaluru");
+    live().setKey("datagovin", "");
+  });
+
+  it("refuses to load without a key of your own", async () => {
+    const st = await load("cpcb-aqi");
+    expect(st.error).toBe("needs an API key");
+    expect(st.items).toHaveLength(0);
+    // And the card offers somewhere to put one.
+    expect($("#smxLayers")!.querySelector('[data-key="datagovin"]')).toBeTruthy();
+    expect($("#smxLayers")!.textContent).toContain("permanently rate-limited");
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("loads once a key is set, and remembers it", async () => {
+    live().setKey("datagovin", "my-own-key");
+    expect((kv.get("smx.keys") as any).datagovin).toBe("my-own-key");
+    const st = await load("cpcb-aqi");
+    expect(st.error).toBeNull();
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("api-key=my-own-key"))).toBe(true);
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("folds one row per pollutant into one station", async () => {
+    live().setKey("datagovin", "k");
+    const st = await load("cpcb-aqi");
+    expect(st.items).toHaveLength(3);                   // three stations from six rows
+    const btm = st.items.find((i: any) => i.city === "Bengaluru");
+    expect(btm.pollutants).toEqual({ "PM2.5": 95, PM10: 140, NO2: 14 });
+    expect(btm.pm25).toBe(95);
+    expect(btm.detail).toContain("PM2.5 95");
+    expect(btm.detail).toContain("Bengaluru, Karnataka");
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("bands a station on CPCB's own PM2.5 breakpoints", async () => {
+    live().setKey("datagovin", "k");
+    const st = await load("cpcb-aqi");
+    const byCity = Object.fromEntries(st.items.map((i: any) => [i.city, i]));
+    expect(byCity.Bengaluru.band).toBe(3);             // 95 µg/m³ → poor
+    expect(byCity.Bengaluru.detail).toContain("poor");
+    expect(byCity.Delhi.band).toBe(4);                 // 310 → the darkest band
+    expect(byCity.Kochi.band).toBe(0);                 // PM10 22 → good
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("colours the stations on the severity ramp, sized by band", async () => {
+    live().setKey("datagovin", "k");
+    const st = await load("cpcb-aqi");
+    const drawn = st.group.getLayers();
+    expect(drawn).toHaveLength(3);
+    const colours = drawn.map((d: any) => d._opts.color);
+    expect(colours).toContain(SMX().SEVERITY[3]);
+    expect(colours).toContain(SMX().SEVERITY[4]);
+    expect(colours).toContain(SMX().SEVERITY[0]);
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("drops a station with no coordinates, and says what it found", async () => {
+    live().setKey("datagovin", "k");
+    const st = await load("cpcb-aqi");
+    expect(st.items.some((i: any) => i.label.includes("No Position"))).toBe(false);
+    expect(st.note).toContain("3 stations");
+    expect(st.note).toContain("worst Delhi 310");
+    await live().setLayer("cpcb-aqi", false);
+  });
+
+  it("alerts on unhealthy air close by, not on clean air or distant smog", async () => {
+    live().setKey("datagovin", "k");
+    const st = await load("cpcb-aqi");
+    live().state.alerts = [];
+    live().state.alerted = new Set();
+    Object.assign(st.alert, { on: true, minPm25: 90, maxKm: 30 });
+    live().evaluateAlerts("cpcb-aqi");
+
+    expect(live().state.alerts).toHaveLength(1);        // Bengaluru at 95, nearby
+    expect(live().state.alerts[0].why).toContain("poor air, 95");
+    // Delhi is worse but 1,700 km away; Kochi is close-ish but clean.
+    expect(live().state.alerts[0].label).toContain("BTM Layout");
+    await live().setLayer("cpcb-aqi", false);
+  });
+});
+
+describe("direction shown on the track line", () => {
+  beforeEach(() => {
+    live().stopTracking();
+    live().forgetAllTracks();
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+  });
+
+  it("gives each track a glow and crawling dashes along its own line", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    expect(track.glow._opts.className).toBe("smx-glow");
+    expect(track.flow._opts.className).toContain("smx-flow");
+    expect(track.flow._opts.dashArray).toBeTruthy();
+    // The dashes are a lighter tint of the track's own colour, not white.
+    expect(track.flow._opts.color).not.toBe("#ffffff");
+    expect(track.flow._opts.color).not.toBe(track.color);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("animates two tracks differently, so neither is mistaken for the other", async () => {
+    await load("aircraft");
+    const [a, b] = stateOf("aircraft").items;
+    const first = live().startTracking("aircraft", a.id);
+    const second = live().startTracking("aircraft", b.id);
+    expect(first.flow._opts.className).not.toBe(second.flow._opts.className);
+    expect(first.flow._opts.dashArray).not.toBe(second.flow._opts.dashArray);
+    expect(first.color).not.toBe(second.color);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("keeps the glow and the dashes on the same path as the line", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    track.points[0].t -= 5000;
+    live().updateTracks();
+    expect(track.trail.getLatLngs().length).toBeGreaterThan(1);
+    expect(track.glow.getLatLngs()).toEqual(track.trail.getLatLngs());
+    expect(track.flow.getLatLngs()).toEqual(track.trail.getLatLngs());
+
+    // Including while a replay clips it.
+    live().setReplay(true);
+    live().setReplayTime(track.points[0].t);
+    expect(track.flow.getLatLngs()).toEqual(track.trail.getLatLngs());
+    live().setReplay(false);
+    expect(track.glow.getLatLngs()).toEqual(track.trail.getLatLngs());
+    await live().setLayer("aircraft", false);
+  });
+
+  it("takes all three off the map when the track stops", async () => {
+    await load("aircraft");
+    const track = live().startTracking("aircraft", stateOf("aircraft").items[0].id);
+    live().stopTracking(track.key);
+    expect(track.trail._map).toBeNull();
+    expect(track.glow._map).toBeNull();
+    expect(track.flow._map).toBeNull();
+    await live().setLayer("aircraft", false);
   });
 });

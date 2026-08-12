@@ -140,6 +140,13 @@ window.SMX = (function () {
   .smx-live-dot.tracked .glyph { filter: drop-shadow(0 0 6px #ec4899); }
   .smx-live-dot.tracked::after { content:''; position:absolute; inset:-5px; border-radius:50%;
                                  border:2px solid #ec4899; animation: smx-mark 1.6s infinite; }
+  /* Direction rhythms: one per tracked object, so two tracks never animate alike. */
+  .smx-flow-0 { animation-duration: 3.6s; }
+  .smx-flow-1 { animation-duration: 2.2s; }
+  .smx-flow-2 { animation-duration: 1.3s; }
+  .smx-flow-3 { animation-duration: 5s; }
+  .smx-flow-4 { animation-duration: 2.8s; animation-direction: reverse; }
+
   .smx-live-dot.replay .glyph { opacity:.85; filter: drop-shadow(0 0 5px #ec4899); }
   .smx-timemark span { display:block; font-size:9.5px; font-weight:700; text-align:center;
                        color:var(--text); background:var(--surface); border:1px solid var(--border);

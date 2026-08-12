@@ -630,11 +630,15 @@ describe("drag and mark modes", () => {
     // In mark mode the app adds a waypoint per click, so the gesture leaves three.
     const mapEl = document.getElementById("map")!;
     for (const name of ["g1", "g2", "g3"]) {
-      (globalThis as any).addWaypoint(12.9, 77.6, name);
+      // Faithful to the app: the gesture counts the click in the capture phase,
+      // and the app adds a pin from that same click only while marking is armed.
       mapEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      if (appState.prefs.tapAdd) (globalThis as any).addWaypoint(12.9, 77.6, name);
     }
+    // The first two clicks dropped pins; the third switched the mode off, so it
+    // never armed a third. Both pins the gesture created are taken back.
     expect(removeWaypointSpy).toHaveBeenCalledWith("wp-g1");
-    expect(removeWaypointSpy).toHaveBeenCalledWith("wp-g3");
+    expect(removeWaypointSpy).toHaveBeenCalledWith("wp-g2");
     expect(appState.waypoints).toHaveLength(before);
     expect(SMX().getMode()).toBe("drag");
   });

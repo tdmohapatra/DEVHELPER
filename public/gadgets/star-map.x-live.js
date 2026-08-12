@@ -48,6 +48,7 @@
       on: false, t: 0, from: 0, to: 0, playing: false, rate: 60, frame: null, last: 0,
     },
     eyeHeight: 1.7,             // observer height, for horizon and look angles
+    keys: {},                   // per-source API keys, for the few sources that need one
     gpsLines: true,             // draw a line from a live GPS fix to each tracked object
     gpsLayer: null,             // those lines, plus the area they span
     coverage: null,
@@ -56,6 +57,9 @@
 
   const TRACK_STORE = 'smx.tracks';
   const TRACK_COLORS = ['#ec4899', '#f472b6', '#c026d3', '#e879f9', '#db2777'];
+  // Dash patterns for the direction animation, one per track, paired with a
+  // matching .smx-flow-N rhythm in the stylesheet.
+  const TRACK_FLOW = ['2 14', '6 10', '1 7', '10 12', '3 20'];
   const MAX_POINTS = 1200;      // per track, about an hour of 3 s satellite fixes
   const MIN_POINT_GAP_MS = 2000;
 
@@ -188,6 +192,31 @@
     renderPanel();
   }, 5000);
 
+  /* ------------------------------- API keys ------------------------------- */
+
+  /**
+   * A couple of sources need a key of the user's own — CPCB's air quality is
+   * published through data.gov.in, whose shared demo key is permanently
+   * rate-limited. Keys live in the same local store as everything else and are
+   * never sent anywhere except to the source that issued them.
+   */
+  try {
+    live.keys = store.get('smx.keys', {}) || {};
+  } catch (_) {
+    live.keys = {};
+  }
+
+  const keyFor = (layer) => (layer && layer.needsKey ? (live.keys[layer.needsKey.id] || '') : '');
+
+  function setKey(id, value) {
+    live.keys[id] = String(value || '').trim();
+    try { store.set('smx.keys', live.keys); } catch (_) { /* best effort */ }
+    for (const layer of live.layers) {
+      if (layer.needsKey && layer.needsKey.id === id && live.state[layer.id].on) refresh(layer.id);
+    }
+    renderPanel();
+  }
+
   /* ------------------------------ registry ------------------------------ */
 
   function register(layer) {
@@ -243,6 +272,12 @@
     const layer = live.layers.find((l) => l.id === id);
     const st = live.state[id];
     if (!layer || !st || !st.on || st.busy) return;
+    if (layer.needsKey && !keyFor(layer)) {
+      st.error = 'needs an API key';
+      st.items = [];
+      renderPanel();
+      return;
+    }
     if (layer.needsHome && !haveObserver()) {
       st.error = 'needs a location';
       renderPanel();
@@ -297,7 +332,7 @@
   function context(layer) {
     const st = live.state[layer.id];
     return {
-      layer, state: st, group: st.group, map, home: observerPoint(),
+      layer, state: st, group: st.group, map, home: observerPoint(), key: keyFor(layer),
       radiusKm: live.radiusKm, bounds: boundsBox(), json: X.json,
       icon: (item, tracked) => liveIcon(layer, item, tracked),
       isTracked: (item) => isTracking(layer.id, item.id),
@@ -400,6 +435,13 @@
 
   const trackKey = (layerId, itemId) => `${layerId}:${itemId}`;
 
+  /** The trail, its glow and its direction dashes always show the same path. */
+  function setTrackPath(track, latlngs) {
+    track.trail.setLatLngs(latlngs);
+    if (track.glow) track.glow.setLatLngs(latlngs);
+    if (track.flow) track.flow.setLatLngs(latlngs);
+  }
+
   /**
    * Start following an object. Several can be tracked at once; the camera
    * follows at most one of them, and following is optional — the map can stay
@@ -430,6 +472,19 @@
         pane: 'smx-live', color, weight: 3, opacity: 0.95,
         interactive: true, bubblingMouseEvents: false,
       }).addTo(map),
+      // Which way it is going, shown rather than stated: a blurred pulsing glow
+      // under the line and dashes that crawl along it towards the object. Each
+      // track gets its own dash pattern and rhythm from TRACK_FLOW, so two
+      // tracks side by side are never the same animation.
+      glow: L.polyline([], {
+        pane: 'smx-live-raster', className: 'smx-glow',
+        color, weight: 11, opacity: 0.25, interactive: false,
+      }).addTo(map),
+      flow: L.polyline([], {
+        pane: 'smx-live', className: `smx-flow smx-flow-${live.tracks.size % TRACK_FLOW.length}`,
+        color: X.lighten(color, 0.6), weight: 2, opacity: 0.95, interactive: false,
+        dashArray: TRACK_FLOW[live.tracks.size % TRACK_FLOW.length],
+      }).addTo(map),
       sightline: L.polyline([], {
         pane: 'smx-live-raster', color, weight: 1.5, opacity: 0.85, dashArray: '2 6', interactive: false,
       }),
@@ -442,7 +497,7 @@
       view: null,               // the geometry of the latest fix
       pass: null,               // when it can next be seen, if the layer knows
     };
-    track.trail.setLatLngs(track.points.map((pt) => [pt.lat, pt.lng]));
+    setTrackPath(track, track.points.map((pt) => [pt.lat, pt.lng]));
     bindTrackHover(track);
     live.tracks.set(key, track);
     refreshMarker(layerId, itemId);
@@ -529,6 +584,8 @@
       startedAt: track.startedAt, points: track.points,
     };
     track.trail.remove();
+    if (track.glow) track.glow.remove();
+    if (track.flow) track.flow.remove();
     track.sightline.remove();
     track.footprint.remove();
     track.marks.remove();
@@ -611,6 +668,7 @@
       track.trail.addLatLng(at);
       const drawn = track.trail.getLatLngs();
       if (drawn.length > MAX_POINTS) track.trail.setLatLngs(drawn.slice(-MAX_POINTS));
+      setTrackPath(track, track.trail.getLatLngs());
       saveTracks();
     }
 
@@ -720,7 +778,7 @@
       pauseReplay();
       for (const track of live.tracks.values()) {
         if (track.ghost) { track.ghost.remove(); track.ghost = null; }
-        track.trail.setLatLngs(track.points.map((p) => [p.lat, p.lng]));
+        setTrackPath(track, track.points.map((p) => [p.lat, p.lng]));
       }
     }
     renderPanel();
@@ -744,7 +802,7 @@
     for (const track of live.tracks.values()) {
       const at = Mx.sampleTrack(track.points, t);
       if (!at) continue;
-      track.trail.setLatLngs(Mx.trackUpTo(track.points, t).map((p) => [p.lat, p.lng]));
+      setTrackPath(track, Mx.trackUpTo(track.points, t).map((p) => [p.lat, p.lng]));
       if (!track.ghost) {
         track.ghost = L.marker([at.lat, at.lng], {
           pane: 'smx-live', zIndexOffset: 700,
@@ -841,7 +899,7 @@
     const track = live.tracks.get(key);
     if (track) {
       track.points = [];
-      track.trail.setLatLngs([]);
+      setTrackPath(track, []);
       track.startedAt = Date.now();
     }
     delete savedTracks[key];
@@ -853,7 +911,7 @@
     savedTracks = {};
     for (const track of live.tracks.values()) {
       track.points = [];
-      track.trail.setLatLngs([]);
+      setTrackPath(track, []);
       track.startedAt = Date.now();
     }
     try { store.set(TRACK_STORE, {}); } catch (_) { /* best effort */ }
@@ -1013,6 +1071,7 @@
 
       X.on(el, '[data-layer]', 'change', (e, box) => setLayer(box.dataset.layer, box.checked));
       X.on(el, '[data-layer-refresh]', 'click', (_e, b) => refresh(b.dataset.layerRefresh));
+      X.on(el, '[data-key]', 'change', (_e, input) => setKey(input.dataset.key, input.value));
       X.on(el, '[data-alert-on]', 'change', (e, box) => {
         live.state[box.dataset.alertOn].alert.on = box.checked;
         save();
@@ -1128,6 +1187,12 @@
             ${st.on ? `<button class="smx-btn" data-layer-refresh="${l.id}" title="Refresh now">${X.icon('rotate')}</button>` : ''}
           </div>
           <div class="smx-hint" style="margin:2px 0">${X.esc(l.hint)}${l.every ? ` · every ${l.every}s` : ''}</div>
+          ${l.needsKey ? `
+            <div class="smx-row">
+              <input type="text" data-key="${l.needsKey.id}" placeholder="${X.esc(l.needsKey.label)}"
+                     value="${X.esc(live.keys[l.needsKey.id] || '')}" aria-label="${X.esc(l.needsKey.label)}" />
+            </div>
+            ${keyFor(l) ? '' : `<div class="smx-hint">${X.esc(l.needsKey.hint)}</div>`}` : ''}
           ${status ? `<div class="smx-hint" style="margin:2px 0">${status}</div>` : ''}
           ${st.on && l.alert ? `
             <div class="smx-row">
@@ -1394,8 +1459,9 @@
     state: live,
     get tracks() { return live.tracks; },
     trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks, haveObserver,
+    setKey, keyFor,
     refreshMarker,
-    setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo,
+    setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo, setTrackPath,
     drawGpsLines, observerPoint, gpsFix,
     get layers() { return live.layers; },
     layerState: (id) => live.state[id],

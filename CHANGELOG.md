@@ -81,6 +81,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - 🚀 **Space launches** — Launch Library 2, each on its pad with a countdown.
   - 🌐 **Internet network** — RIPE Atlas probes around you, connected or not.
   - 🌍 **NASA imagery** — GIBS MODIS true colour from yesterday's pass.
+  - 🔥 **Active fires** — NASA GIBS VIIRS thermal anomalies, today's pass, no key.
+    Per-fire detail (brightness, confidence) needs a free FIRMS key, and the layer
+    says so rather than pretending.
+  - 💨 **Air quality (India)** — CPCB's continuous monitoring stations through
+    data.gov.in. One row per pollutant per station is folded into one station with
+    every pollutant it reported, banded on CPCB's own PM2.5 breakpoints. Needs a
+    free data.gov.in key of your own, entered on the layer's card: the sample key
+    everybody shares is permanently rate-limited, so it cannot be a default.
 - **A location of your own**: GPS, the map centre, or alt-click to place it. It
   draws a radius circle, and everything distance-related is measured from it.
 - **Proximity alerts**, one rule per layer with its own thresholds: an aircraft
@@ -107,6 +115,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - **Saved history.** Every fix is stored with its timestamp and the look angles
     that were true then, survives closing the tool, and exports as GPX, CSV or
     JSON. Deleting a history is a separate, deliberate act.
+  - **Direction, shown not stated.** Each tracked line carries a blurred pulsing
+    glow and dashes crawling towards the object, and every track gets its own dash
+    pattern and rhythm — so two tracks side by side are never the same animation.
   - **Replay** the recording: a scrubber across the recorded window with play,
     pause and speed. Each object sits where it was at that moment and its line is
     clipped to what it had covered, with time marks along it.
