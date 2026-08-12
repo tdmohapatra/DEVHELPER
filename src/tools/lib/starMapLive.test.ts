@@ -20,6 +20,11 @@ function makeLayer(kind: string, extra: Record<string, any> = {}) {
     remove() { if (this._map && this._map.removeLayer) this._map.removeLayer(this); this._map = null; return this; },
     clearLayers() { this._children = []; return this; },
     addLayer(l: any) { (this._children ||= []).push(l); return this; },
+    removeLayer(l: any) {
+      this._children = (this._children || []).filter((c: any) => c !== l);
+      if (l && l._map) l._map = null;
+      return this;
+    },
     getLayers() { return this._children || []; },
     setLatLngs(v: any[]) { this._latlngs = v; return this; },
     getLatLngs() { return this._latlngs; },
@@ -30,12 +35,16 @@ function makeLayer(kind: string, extra: Record<string, any> = {}) {
     setStyle(s: any) { Object.assign(this._style, s); return this; },
     setOpacity() { return this; },
     setIcon() { return this; },
-    bindPopup(p: any) { this._popup = p; return this; },
+    bindPopup(p: any) { this._popup = p; this._popupContent = typeof p === "function" ? p() : p; return this; },
+    setPopupContent(c: any) { this._popupContent = c; return this; },
+    getPopup() { return this._popup; },
+    isPopupOpen() { return !!this._popupOpen; },
+    openPopup() { this._popupOpen = true; if (this._popup) this._popupContent = typeof this._popup === "function" ? this._popup() : this._popup; return this; },
+    closePopup() { this._popupOpen = false; return this; },
     bindTooltip(t: any) { this._tooltip = t; this._tooltipContent = typeof t === "function" ? t() : t; return this; },
     setTooltipContent(c: any) { this._tooltipContent = c; return this; },
     getTooltipContent() { return this._tooltipContent; },
     fire(event: string, payload?: any) { (this._events?.[event] || []).forEach((f: Function) => f(payload)); return this; },
-    openPopup() { return this; },
     on(event: string, fn: Function) { ((this._events ||= {})[event] ||= []).push(fn); return this; },
     off() { return this; },
     bringToFront() { return this; },
@@ -1018,5 +1027,129 @@ describe("a live GPS fix", () => {
     expect(early).not.toEqual(late);
     live().setReplay(false);
     await live().setLayer("aircraft", false);
+  });
+});
+
+describe("clicking an object to track it", () => {
+  /** Put the popup's markup in the document, the way an open popup does. */
+  function openPopupFor(layerId: string, itemId: string) {
+    const marker = stateOf(layerId).markers.get(String(itemId));
+    marker.openPopup();
+    const host = document.createElement("div");
+    host.className = "leaflet-popup";
+    host.innerHTML = marker._popupContent;
+    document.body.appendChild(host);
+    return host;
+  }
+
+  beforeEach(() => {
+    live().stopTracking();
+    live().forgetAllTracks();
+    document.querySelectorAll(".leaflet-popup").forEach((n) => n.remove());
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+  });
+
+  it("keeps one marker per object, addressable by its id", async () => {
+    await load("aircraft");
+    const st = stateOf("aircraft");
+    expect(st.markers.size).toBe(2);
+    expect(st.group.getLayers()).toHaveLength(2);
+    expect(st.markers.get("abc123")._popupContent).toContain("AI101");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("tracks from the popup button, and stops from the same button", async () => {
+    await load("aircraft");
+    const popup = openPopupFor("aircraft", "abc123");
+    const button = popup.querySelector("[data-smx-track]") as HTMLButtonElement;
+    expect(button.dataset.smxTrack).toBe("aircraft|abc123");
+    expect(button.textContent!.trim()).toBe("Track");
+
+    button.click();
+    expect(live().tracks.size).toBe(1);
+    expect(live().isTracking("aircraft", "abc123")).toBe(true);
+
+    // Reopening shows the other half of the toggle.
+    document.querySelectorAll(".leaflet-popup").forEach((n) => n.remove());
+    const again = openPopupFor("aircraft", "abc123");
+    const stop = again.querySelector("[data-smx-track]") as HTMLButtonElement;
+    expect(stop.textContent!.trim()).toBe("Stop tracking");
+    stop.click();
+    expect(live().tracks.size).toBe(0);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("tracks an object whose id contains spaces and brackets", async () => {
+    // This is every satellite: "ISS (ZARYA)". Building a CSS selector out of an
+    // id like that is invalid, which is how the button used to end up unwired.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2024-01-16T12:00:00Z"));
+    await load("satellites");
+    vi.useRealTimers();
+
+    const iss = stateOf("satellites").items[0];
+    expect(iss.id).toBe("ISS (ZARYA)");
+    const popup = openPopupFor("satellites", iss.id);
+    const button = popup.querySelector("[data-smx-track]") as HTMLButtonElement;
+    expect(button.dataset.smxTrack).toBe("satellites|ISS (ZARYA)");
+
+    button.click();
+    expect(live().isTracking("satellites", "ISS (ZARYA)")).toBe(true);
+    expect([...live().tracks.values()][0].label).toBe("ISS (ZARYA)");
+    await live().setLayer("satellites", false);
+  });
+
+  it("keeps the marker and its open popup alive across a refresh", async () => {
+    await load("aircraft");
+    const st = stateOf("aircraft");
+    const marker = st.markers.get("abc123");
+    marker.openPopup();
+    expect(marker.isPopupOpen()).toBe(true);
+
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => !stateOf("aircraft").busy, { timeout: 5000 });
+
+    // The same marker object, moved rather than rebuilt — so the popup a finger
+    // is heading for is still there when it lands.
+    expect(stateOf("aircraft").markers.get("abc123")).toBe(marker);
+    expect(marker.isPopupOpen()).toBe(true);
+    expect(marker._popupContent).toContain("AI101");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("removes a marker from the group when its object leaves the feed", async () => {
+    await load("aircraft");
+    const st = stateOf("aircraft");
+    const going = st.markers.get("def456");
+    expect(st.group.getLayers()).toHaveLength(2);
+
+    fixtures.aircraft = { ac: [fixtures.aircraft.ac[0], fixtures.aircraft.ac[2]] };
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => stateOf("aircraft").items.length === 1, { timeout: 5000 });
+
+    expect(st.markers.has("def456")).toBe(false);
+    expect(st.group.getLayers()).toHaveLength(1);          // no stale layers left behind
+    expect(st.group.getLayers()).not.toContain(going);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("marks the tracked object on the map as tracked", async () => {
+    await load("aircraft");
+    const marker = stateOf("aircraft").markers.get("abc123");
+    live().startTracking("aircraft", "abc123");
+    live().refreshMarker("aircraft", "abc123");
+    expect(marker._icon_className || marker._lastIcon?.className || "").toBeDefined();
+    // The icon is rebuilt with the tracked flag; the framework's own view agrees.
+    expect(live().isTracking("aircraft", "abc123")).toBe(true);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("ignores a click that carries no object", () => {
+    const stray = document.createElement("button");
+    stray.dataset.smxTrack = "nonsense-without-a-separator";
+    document.body.appendChild(stray);
+    expect(() => stray.click()).not.toThrow();
+    expect(live().tracks.size).toBe(0);
+    stray.remove();
   });
 });

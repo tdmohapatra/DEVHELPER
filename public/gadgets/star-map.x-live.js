@@ -167,6 +167,7 @@
     live.layers.push(layer);
     live.state[layer.id] = {
       on: false, group: L.layerGroup([], { pane: 'smx-live' }), items: [], note: '',
+      markers: new Map(),        // item id -> marker, kept across refreshes
       error: null, at: 0, busy: false, timer: null, raster: null,
       alert: Object.assign({ on: false }, (layer.alert && layer.alert.defaults) || {}),
     };
@@ -190,6 +191,7 @@
       clearTimeout(st.timer);
       st.timer = null;
       st.group.clearLayers().remove();
+      st.markers.clear();
       if (st.raster) { st.raster.remove(); st.raster = null; }
       st.items = [];
       for (const track of [...live.tracks.values()]) {
@@ -238,8 +240,17 @@
       st.items = out.items || [];
       st.note = out.note || '';
       st.at = Date.now();
-      st.group.clearLayers();
-      (layer.draw || defaultDraw)(st.items, ctx);
+      // Only a layer with its own draw gets a clean slate. The default draw
+      // reconciles instead: a marker that is still there is moved, not rebuilt,
+      // so an open popup survives a refresh — which is the difference between
+      // being able to press Track and watching it vanish under the pointer.
+      if (layer.draw) {
+        st.group.clearLayers();
+        st.markers.clear();
+        layer.draw(st.items, ctx);
+      } else {
+        defaultDraw(st.items, ctx);
+      }
       evaluateAlerts(id);
       for (const track of live.tracks.values()) {
         if (track.layerId === id) updateTrack(track);
@@ -267,17 +278,58 @@
     };
   }
 
-  /** What most layers want: a marker per item with a popup and a track button. */
+  /**
+   * A marker per item, reused between refreshes.
+   *
+   * Markers are kept in a map by item id: one that is still in the data moves,
+   * one that has gone is removed, and only genuinely new ones are created. An
+   * open popup therefore stays open across a refresh — with satellites
+   * refreshing every five seconds, rebuilding them made the popup impossible to
+   * click.
+   */
   function defaultDraw(items, ctx) {
+    const state = ctx.state;
+    const seen = new Set();
     for (const item of items) {
       if (!Number.isFinite(item.lat) || !Number.isFinite(item.lng)) continue;
-      L.marker([item.lat, item.lng], {
+      const key = String(item.id);
+      seen.add(key);
+      let marker = state.markers.get(key);
+      if (marker) {
+        marker.setLatLng([item.lat, item.lng]);
+        marker.setIcon(ctx.icon(item, ctx.isTracked(item)));
+        marker.smxItem = item;                       // the popup reads the latest fix
+        if (marker.isPopupOpen && marker.isPopupOpen()) {
+          marker.setPopupContent(popupHtml(ctx.layer, item));
+        }
+        continue;
+      }
+      marker = L.marker([item.lat, item.lng], {
         pane: 'smx-live', icon: ctx.icon(item, ctx.isTracked(item)), riseOnHover: true,
-      })
-        .bindPopup(() => popupHtml(ctx.layer, item))
-        .on('popupopen', () => bindPopupButtons(ctx.layer, item))
-        .addTo(ctx.group);
+      });
+      marker.smxItem = item;
+      marker.bindPopup(() => popupHtml(ctx.layer, marker.smxItem));
+      marker.addTo(ctx.group);
+      state.markers.set(key, marker);
     }
+    for (const [key, marker] of [...state.markers]) {
+      if (seen.has(key)) continue;
+      // Through the group, not marker.remove(): that only detaches it from the
+      // map and leaves it in the group, so getLayers() keeps handing back
+      // markers that are no longer anywhere.
+      ctx.group.removeLayer(marker);
+      state.markers.delete(key);
+    }
+  }
+
+  /** Redraw one item's marker icon, e.g. when it starts or stops being tracked. */
+  function refreshMarker(layerId, itemId) {
+    const st = live.state[layerId];
+    const layer = live.layers.find((l) => l.id === layerId);
+    if (!st || !layer) return;
+    const marker = st.markers.get(String(itemId));
+    const item = st.items.find((i) => String(i.id) === String(itemId));
+    if (marker && item) marker.setIcon(liveIcon(layer, item, isTracking(layerId, itemId)));
   }
 
   function popupHtml(layer, item) {
@@ -292,15 +344,29 @@
       </div>`;
   }
 
-  function bindPopupButtons(layer, item) {
-    const btn = document.querySelector(`[data-smx-track="${layer.id}|${item.id}"]`);
+  /**
+   * The Track button, handled by delegation.
+   *
+   * It used to be found with a selector built from the layer and item id — which
+   * breaks the moment an id contains a space or a bracket, as every satellite
+   * name does: the selector is invalid, so the button silently stayed unwired
+   * and a stale one elsewhere in the document answered the click instead.
+   * Reading the id back off the element cannot go wrong that way.
+   */
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('[data-smx-track]');
     if (!btn) return;
-    btn.addEventListener('click', () => {
-      if (isTracking(layer.id, item.id)) stopTracking(trackKey(layer.id, item.id));
-      else startTracking(layer.id, item.id);
-      map.closePopup();
-    });
-  }
+    e.preventDefault();
+    const raw = btn.dataset.smxTrack || '';
+    const split = raw.indexOf('|');
+    if (split < 0) return;
+    const layerId = raw.slice(0, split);
+    const itemId = raw.slice(split + 1);
+    if (isTracking(layerId, itemId)) stopTracking(trackKey(layerId, itemId));
+    else startTracking(layerId, itemId);
+    refreshMarker(layerId, itemId);
+    map.closePopup();
+  });
 
   /* ------------------------------ tracking ------------------------------ */
 
@@ -351,6 +417,7 @@
     track.trail.setLatLngs(track.points.map((pt) => [pt.lat, pt.lng]));
     bindTrackHover(track);
     live.tracks.set(key, track);
+    refreshMarker(layerId, itemId);
     X.notify(`Tracking ${track.label}. The map stays where it is — hover the line for its numbers.`, 'ok', 3000);
     updateTrack(track);
     drawGpsLines();
@@ -439,6 +506,7 @@
     track.marks.remove();
     if (track.ghost) track.ghost.remove();
     live.tracks.delete(key);
+    refreshMarker(track.layerId, track.itemId);
     drawGpsLines();
     if (live.followKey === key) live.followKey = live.tracks.size ? [...live.tracks.keys()][0] : null;
     saveTracks();
@@ -1297,6 +1365,7 @@
     state: live,
     get tracks() { return live.tracks; },
     trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks,
+    refreshMarker,
     setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo,
     drawGpsLines, observerPoint, gpsFix,
     get layers() { return live.layers; },
