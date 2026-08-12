@@ -16,6 +16,7 @@
        needsBounds,                refetch when the map is panned
        minZoom,                    do not load below this zoom (declutter)
        needsHome,                  disabled until a location is set
+       query,                      { label, placeholder } — a text box on its card
        raster,                     () => L.tileLayer — for imagery layers
        load(ctx),                  async; returns { items, note }
        enrich(item, ctx),          async; fills in detail too costly to fetch for all
@@ -343,6 +344,7 @@
     const st = live.state[layer.id];
     return {
       layer, state: st, group: st.group, map, home: observerPoint(), key: keyFor(layer),
+      query: st.query || '',
       radiusKm: live.radiusKm, bounds: boundsBox(), json: X.json,
       icon: (item, tracked) => liveIcon(layer, item, tracked),
       isTracked: (item) => isTracking(layer.id, item.id),
@@ -1050,6 +1052,7 @@
       store.set(STORE_KEY, {
         home: live.home, radiusKm: live.radiusKm, autoRefresh: live.autoRefresh, muted: live.muted,
         on: live.layers.filter((l) => live.state[l.id].on).map((l) => l.id),
+        queries: Object.fromEntries(live.layers.filter((l) => l.query).map((l) => [l.id, live.state[l.id].query || ''])),
         alerts: Object.fromEntries(live.layers.map((l) => [l.id, live.state[l.id].alert])),
       });
     } catch (_) { /* best effort */ }
@@ -1065,6 +1068,7 @@
     for (const l of live.layers) {
       const a = saved.alerts && saved.alerts[l.id];
       if (a) Object.assign(live.state[l.id].alert, a);
+      if (saved.queries && saved.queries[l.id]) live.state[l.id].query = saved.queries[l.id];
     }
     if (saved.home) setHome(saved.home, saved.home.label);
     (saved.on || []).forEach((id) => { if (live.state[id]) setLayer(id, true); });
@@ -1112,6 +1116,13 @@
       X.on(el, '[data-layer]', 'change', (e, box) => setLayer(box.dataset.layer, box.checked));
       X.on(el, '[data-layer-refresh]', 'click', (_e, b) => refresh(b.dataset.layerRefresh));
       X.on(el, '[data-key]', 'change', (_e, input) => setKey(input.dataset.key, input.value));
+      X.on(el, '[data-query]', 'change', (_e, input) => {
+        const st = live.state[input.dataset.query];
+        if (!st) return;
+        st.query = input.value.trim();
+        save();
+        if (st.on) refresh(input.dataset.query);
+      });
       X.on(el, '[data-alert-on]', 'change', (e, box) => {
         live.state[box.dataset.alertOn].alert.on = box.checked;
         save();
@@ -1227,6 +1238,11 @@
             ${st.on ? `<button class="smx-btn" data-layer-refresh="${l.id}" title="Refresh now">${X.icon('rotate')}</button>` : ''}
           </div>
           <div class="smx-hint" style="margin:2px 0">${X.esc(l.hint)}${l.every ? ` · every ${l.every}s` : ''}</div>
+          ${l.query ? `
+            <div class="smx-row">
+              <input type="text" data-query="${l.id}" placeholder="${X.esc(l.query.placeholder)}"
+                     value="${X.esc(st.query || '')}" aria-label="${X.esc(l.query.label)}" />
+            </div>` : ''}
           ${l.needsKey ? `
             <div class="smx-row">
               <input type="text" data-key="${l.needsKey.id}" placeholder="${X.esc(l.needsKey.label)}"

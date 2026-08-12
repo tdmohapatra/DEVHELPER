@@ -136,6 +136,24 @@ const fixtures: Record<string, any> = {
       { id: 3, lat: 12.99, lon: 77.62, tags: { railway: "tram_stop", name: "Tramway" } },
     ],
   },
+  overpassBmtc: {
+    elements: [
+      {
+        type: "relation", id: 987654,
+        tags: { route: "bus", operator: "BMTC", ref: "500D", name: "500D: Kempegowda Bus Station to Whitefield",
+          from: "Kempegowda Bus Station", to: "Whitefield" },
+        members: [
+          { type: "node", ref: 11, role: "stop", lat: 12.977, lon: 77.571 },
+          { type: "node", ref: 12, role: "platform", lat: 12.985, lon: 77.60 },
+          { type: "node", ref: 13, role: "stop", lat: 12.995, lon: 77.66 },
+          { type: "node", ref: 14, role: "", lat: 12.999, lon: 77.70 },       // not a stop role
+          { type: "way", ref: 21, role: "", geometry: [
+            { lat: 12.977, lon: 77.571 }, { lat: 12.985, lon: 77.60 }, { lat: 12.995, lon: 77.66 }] },
+          { type: "way", ref: 22, role: "", geometry: [{ lat: 12.995, lon: 77.66 }] },   // too short to draw
+        ],
+      },
+    ],
+  },
   overpassPlaces: {
     elements: [
       { id: 3, lat: 12.96, lon: 77.59, tags: { amenity: "hospital", name: "General", phone: "123" } },
@@ -222,7 +240,9 @@ const fetchMock = vi.fn(async (url: string, init?: any) => {
     : u.includes("earthquake.usgs.gov") ? fixtures.quakes
     : u.includes("rainviewer") ? fixtures.radar
     : u.includes("api.weather.gov") ? fixtures.nws
-    : u.includes("overpass") ? (String(init && init.body).includes("railway") ? fixtures.overpassTransport : fixtures.overpassPlaces)
+    : u.includes("overpass")
+      ? (String(init && init.body).includes("BMTC") ? fixtures.overpassBmtc
+        : String(init && init.body).includes("railway") ? fixtures.overpassTransport : fixtures.overpassPlaces)
     : u.includes("marine-api") ? fixtures.marine
     : u.includes("api.nasa.gov") ? fixtures.neows
     : u.includes("thespacedevs") ? fixtures.launches
@@ -305,7 +325,7 @@ describe("live framework", () => {
   it("registers every layer in the order they are declared", () => {
     expect(live().layers.map((l: any) => l.id)).toEqual([
       "satellites", "aircraft", "earthquakes", "radar", "weather-alerts",
-      "transport", "places", "ocean", "asteroids", "launches",
+      "transport", "places", "bmtc", "ocean", "asteroids", "launches",
       "fires", "cpcb-aqi", "internet", "gibs",
     ]);
     expect(live().layers.every((l: any) => l.emoji && l.hint)).toBe(true);
@@ -1719,5 +1739,68 @@ describe("military and state aircraft", () => {
     fixtures.aircraft = { ac: FLEET().ac.filter((a: any) => a.hex !== "800aaa") };
     await live().refresh("aircraft");
     await vi.waitUntil(() => !stateOf("aircraft").milTrails.has("800aaa"), { timeout: 5000 });
+  });
+});
+
+describe("BMTC buses", () => {
+  afterEach(async () => { await live().setLayer("bmtc", false); });
+
+  it("draws a route, its stops in order and its two ends", async () => {
+    live().state.bmtcQuerySet = true;
+    stateOf("bmtc").query = "500";
+    const st = await load("bmtc");
+    expect(st.items).toHaveLength(1);
+
+    const route = st.items[0];
+    expect(route.ref).toBe("500D");
+    expect(route.label).toContain("Kempegowda Bus Station → Whitefield");
+    expect(route.shape).toHaveLength(1);                 // the one-node way is dropped
+    expect(route.shape[0]).toHaveLength(3);
+    expect(route.stops.map((s: any) => s.seq)).toEqual([1, 2, 3]);   // in the order served
+    expect(route.stops.some((s: any) => s.ref === 14)).toBe(false);  // a member with no stop role
+  });
+
+  it("measures the route from its own geometry and counts its stops", async () => {
+    stateOf("bmtc").query = "500";
+    const st = await load("bmtc");
+    expect(st.items[0].detail).toContain("<small>stops</small>");
+    expect(st.items[0].detail).toContain("<small>length</small>");
+    expect(st.note).toBe("1 route, 3 stops");
+  });
+
+  it("says plainly that this source carries no timetable", async () => {
+    stateOf("bmtc").query = "500";
+    const st = await load("bmtc");
+    expect(st.items[0].detail).toContain("no timetable in this source");
+    expect(st.items[0].detail).toContain("relation 987654");
+  });
+
+  it("puts the line, a dot per stop and one marker on the map", async () => {
+    stateOf("bmtc").query = "500";
+    const st = await load("bmtc");
+    const drawn = st.group.getLayers();
+    expect(drawn.filter((l: any) => l.kind === "polyline")).toHaveLength(1);
+    expect(drawn.filter((l: any) => l.kind === "circleMarker")).toHaveLength(3);
+    expect(drawn.filter((l: any) => l.kind === "marker")).toHaveLength(1);
+  });
+
+  it("asks for a route number, and remembers the one given", async () => {
+    const layer = live().layers.find((l: any) => l.id === "bmtc");
+    expect(layer.query.label).toContain("route number");
+    stateOf("bmtc").query = "500";
+    await load("bmtc");
+    // The query reaches Overpass, and is saved for next time.
+    expect(fetchMock.mock.calls.some((c) => String(c[1] && c[1].body).includes("500"))).toBe(true);
+    expect((kv.get("smx.live") as any).queries.bmtc).toBe("500");
+  });
+
+  it("says nothing is mapped here rather than looking broken", async () => {
+    const real = fixtures.overpassBmtc;
+    fixtures.overpassBmtc = { elements: [] };
+    stateOf("bmtc").query = "999X";
+    const st = await load("bmtc");
+    expect(st.items).toHaveLength(0);
+    expect(st.note).toContain('no BMTC route matching "999X"');
+    fixtures.overpassBmtc = real;
   });
 });

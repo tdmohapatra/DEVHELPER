@@ -211,6 +211,8 @@
   // Deliberately not the severity green: this is an identity, and it has to be
   // impossible to mistake for a reading. Documented in the colour key.
   const MIL_COLOR = '#00e676';
+  // A bus route is a line on the ground, not a reading: identity family, one hue.
+  const BUS_COLOR = '#60a5fa';
 
   live.register({
     id: 'aircraft',
@@ -890,6 +892,159 @@
         };
       }).filter((i) => Number.isFinite(i.lat));
       return { items, note: 'the kind of place worth knowing before you need it' };
+    },
+  });
+
+  /* ================================= BMTC ================================= */
+
+  /**
+   * Bengaluru's buses: routes, their shape on the ground, and their stops in
+   * order.
+   *
+   * The source is OpenStreetMap, where 859 BMTC routes are mapped as relations —
+   * reachable from a page, unlike BMTC's own API, which refuses connections from
+   * here and sends no CORS header, so live vehicle positions are not available to
+   * a browser at all. The layer says that rather than implying the buses will
+   * appear.
+   *
+   * What OSM does carry: the route number, its two ends, the path it takes, and
+   * every stop along it in sequence. What it does not: a timetable. Nothing here
+   * invents one.
+   */
+  const bmtcQuery = (ref, box) => {
+    const filter = ref
+      ? `["ref"~"^${ref.replace(/[^\w-]/g, '')}",i]`
+      : '';
+    // Geometry is expensive on a shared service, so it is only asked for when a
+    // route number narrows the answer. Without one, list what is here by name.
+    return ref
+      ? `[out:json][timeout:60];
+         relation["route"="bus"]["operator"~"BMTC",i]${filter}(${box});
+         out body geom 6;`
+      : `[out:json][timeout:30];
+         relation["route"="bus"]["operator"~"BMTC",i](${box});
+         out tags 40;`;
+  };
+
+  /** A relation's member ways, joined into the lines the bus actually drives. */
+  function routeShape(rel) {
+    const lines = [];
+    for (const member of rel.members || []) {
+      if (member.type !== 'way' || !Array.isArray(member.geometry)) continue;
+      const points = member.geometry.filter(Boolean).map((g) => [g.lat, g.lon]);
+      if (points.length > 1) lines.push(points);
+    }
+    return lines;
+  }
+
+  /** Stops in the order the relation lists them, which is the order they are served. */
+  function routeStops(rel) {
+    return (rel.members || [])
+      .filter((m) => m.type === 'node' && Number.isFinite(m.lat) && Number.isFinite(m.lon)
+        && /stop|platform/i.test(m.role || ''))
+      .map((m, i) => ({ seq: i + 1, lat: m.lat, lng: m.lon, ref: m.ref }));
+  }
+
+  live.register({
+    id: 'bmtc',
+    label: 'BMTC buses',
+    emoji: '🚌',
+    hint: 'Bengaluru bus routes, their path and their stops, from OpenStreetMap. '
+      + 'Type a route number to draw it. Live vehicle positions are not open — see the note.',
+    attribution: '&copy; OpenStreetMap contributors',
+    needsBounds: true,
+    query: { label: 'BMTC route number', placeholder: 'route number, e.g. 500 or KBS-1' },
+    async load(ctx) {
+      const box = bbox(ctx.bounds);
+      const els = await overpass(bmtcQuery(ctx.query, box));
+      const routes = els.filter((e) => e.type === 'relation');
+      if (!routes.length) {
+        return {
+          items: [],
+          note: ctx.query
+            ? `no BMTC route matching "${X.esc(ctx.query)}" mapped in this view`
+            : 'no BMTC routes in this view — try Bengaluru',
+        };
+      }
+
+      // Without geometry there is nothing to draw, so list the routes and say how
+      // to see one.
+      if (!ctx.query) {
+        const named = routes.map((rel) => (rel.tags || {}).ref).filter(Boolean).sort();
+        return {
+          items: [],
+          note: `${routes.length} BMTC routes here — ${named.slice(0, 14).join(', ')}`
+            + `${named.length > 14 ? '…' : ''} · type one above to draw it`,
+        };
+      }
+
+      const items = routes.map((rel) => {
+        const t = rel.tags || {};
+        const shape = routeShape(rel);
+        const stops = routeStops(rel);
+        const first = (shape[0] && shape[0][0]) || (stops[0] && [stops[0].lat, stops[0].lng]);
+        const metres = shape.reduce((sum, line) => sum + Mx.cumulative(
+          line.map(([lat, lng]) => ({ lat, lng })),
+        ).pop(), 0);
+        return {
+          id: `bmtc${rel.id}`,
+          label: `${t.ref || 'route'} · ${t.from || '?'} → ${t.to || '?'}`,
+          lat: first ? first[0] : null,
+          lng: first ? first[1] : null,
+          glyph: '🚌',
+          ref: t.ref || null,
+          shape, stops,
+          detail: X.kv([
+            ['route', X.esc(t.ref || '—')],
+            ['stops', stops.length || null],
+            ['length', metres > 0 ? X.dist(metres) : null],
+          ]) + `<div class="smx-meta">${X.esc(t.name || '')}</div>`
+            + `${t.from || t.to ? `<div class="smx-route"><span class="code">${X.esc(t.from || '?')}</span>`
+              + `<span class="arrow">→</span><span class="code">${X.esc(t.to || '?')}</span></div>` : ''}`
+            + `<div class="smx-meta">OpenStreetMap relation ${rel.id} · no timetable in this source</div>`,
+        };
+      });
+
+      const drawnStops = items.reduce((n, i) => n + i.stops.length, 0);
+      return {
+        items,
+        note: `${items.length} route${items.length > 1 ? 's' : ''}, ${drawnStops} stops`
+          + `${ctx.query ? '' : ' · type a route number to narrow it'}`,
+      };
+    },
+    /**
+     * The route drawn as it runs, with its stops as small dots and the ends
+     * marked. One colour for every route: these are lines on the ground, not
+     * measurements, and the panel identifies them.
+     */
+    draw(items, ctx) {
+      for (const item of items) {
+        for (const line of item.shape) {
+          L.polyline(line, {
+            pane: live.rasterPane, color: BUS_COLOR, weight: 4, opacity: 0.85, interactive: true,
+          })
+            .bindTooltip(`🚌 ${X.esc(item.label)}`, { sticky: true })
+            .addTo(ctx.group);
+        }
+        for (const stop of item.stops) {
+          L.circleMarker([stop.lat, stop.lng], {
+            pane: live.pane, radius: 3.2, color: BUS_COLOR, weight: 1.2,
+            fillColor: '#0b0f14', fillOpacity: 0.9,
+          })
+            .bindTooltip(`${stop.seq}. ${X.esc(stop.ref || 'stop')} — ${X.esc(item.ref || '')}`, { direction: 'top' })
+            .addTo(ctx.group);
+        }
+        if (Number.isFinite(item.lat)) {
+          L.marker([item.lat, item.lng], {
+            pane: live.pane, icon: L.divIcon({
+              className: 'smx-live-dot smx-bus', iconSize: [22, 22], iconAnchor: [11, 11],
+              html: '<span class="glyph">🚌</span>',
+            }),
+          })
+            .bindPopup(`<b>🚌 ${X.esc(item.label)}</b><div>${item.detail}</div>`)
+            .addTo(ctx.group);
+        }
+      }
     },
   });
 
