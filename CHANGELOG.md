@@ -75,13 +75,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
     says so rather than looking broken elsewhere.
   - 🚆 **Public transport** — OSM stations and stops from zoom 13. Infrastructure,
     not vehicles: live positions need an operator's GTFS-RT feed.
-  - 🚌 **BMTC buses** — Bengaluru's bus routes from OpenStreetMap, where 859 of
-    them are mapped: type a route number and it draws the path the bus takes, a dot
-    per stop in the order they are served, and the two ends of the line. Without a
-    number it lists what runs through the current view. Live vehicle positions are
-    **not** available — BMTC's own API refuses browser requests and sends no CORS
-    header — and the layer says so rather than implying buses will appear. OSM
-    carries no timetable either, and nothing here invents one.
+  - 🚌 **BMTC buses** — Bengaluru's bus network from OpenStreetMap, where 859 routes
+    are mapped.
+    - **Stops near you**, nearest first, with the distance from your location and
+      the date OSM last had them touched, so you can judge how much to trust it.
+    - **Which routes serve a stop**, fetched when you open that stop rather than
+      for every stop in the city: walking from all of them back up to their route
+      relations is the query that makes Overpass say "busy".
+    - **A route drawn in full** — type its number and it draws the path the bus
+      takes, a dot per stop in the order served, and the two ends of the line.
+    - **How long to reach a stop**, by walking, cycling and driving, through the
+      same router the simulation uses, with the pace capped per mode because the
+      public router only hosts the car profile. Asked for on demand, cached.
+    - **An alert for being beside a stop**, naming the routes that call there.
+    - **Live vehicle positions**: BMTC's own API refuses browser requests and sends
+      no CORS header, and there is no open GTFS-Realtime feed for the city, so the
+      layer is a socket with nothing plugged in — paste a URL returning
+      `[{id, lat, lng, route, at}]` and it draws and tracks them. Until then it says
+      so, which beats an empty map that looks broken. OSM carries no timetable
+      either, and nothing here invents one.
   - 🏙️ **Places** — OSM hospitals, pharmacies, fuel, water and police from zoom 12.
   - 🌊 **Ocean** — OpenSeaMap seamarks plus Open-Meteo Marine sea state.
   - ☄️ **Asteroids** — NASA NeoWs close approaches for the week, in lunar distances.

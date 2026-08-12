@@ -802,9 +802,13 @@
   /* =========================== Overpass layers =========================== */
 
   /** Overpass is a shared free service; keep queries small and timeouts short. */
+  // Tried in order. The first two are the ones observed to send an
+  // Access-Control-Allow-Origin header on a POST, which a browser requires; the
+  // third is a further fallback for when both are saturated, as they often are.
   const OVERPASS_ENDPOINTS = [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',   // mirror, for when the main one is saturated
+    'https://overpass.osm.ch/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
   ];
 
   async function overpass(query) {
@@ -911,6 +915,28 @@
    * every stop along it in sequence. What it does not: a timetable. Nothing here
    * invents one.
    */
+  /**
+   * Stops near a point, with the routes that serve each one.
+   *
+   * `rel(bn)` walks from the stop nodes back up to the route relations that
+   * contain them, which is how a stop learns its own route list — the
+   * relationship exists in OSM, it just has to be asked for in that direction.
+   */
+  const bmtcStopsQuery = (lat, lng, radiusM) => `[out:json][timeout:25];
+    node(around:${Math.round(radiusM)},${lat.toFixed(5)},${lng.toFixed(5)})["highway"="bus_stop"];
+    out meta 150;`;
+
+  /**
+   * Which routes serve one stop.
+   *
+   * Asked per stop, not for all of them at once: walking from every stop in a
+   * city back up to its route relations is the query that gets Overpass to say
+   * "busy", and it is wasted work for stops nobody opens.
+   */
+  const bmtcRoutesAtStop = (nodeId) => `[out:json][timeout:20];
+    rel(bn:${nodeId})["route"="bus"];
+    out tags 60;`;
+
   const bmtcQuery = (ref, box) => {
     const filter = ref
       ? `["ref"~"^${ref.replace(/[^\w-]/g, '')}",i]`
@@ -920,7 +946,7 @@
     return ref
       ? `[out:json][timeout:60];
          relation["route"="bus"]["operator"~"BMTC",i]${filter}(${box});
-         out body geom 6;`
+         out meta geom 6;`
       : `[out:json][timeout:30];
          relation["route"="bus"]["operator"~"BMTC",i](${box});
          out tags 40;`;
@@ -945,106 +971,285 @@
       .map((m, i) => ({ seq: i + 1, lat: m.lat, lng: m.lon, ref: m.ref }));
   }
 
+  /**
+   * Travel time from your location to a point, by each way of getting there.
+   *
+   * The same router the simulation uses, so a walk here and a walk there agree.
+   * Asked for only when wanted — three routing calls per stop is not something to
+   * do for every stop on screen.
+   */
+  const etaCache = new Map();
+  async function travelTimes(from, to) {
+    const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}>${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
+    if (etaCache.has(key)) return etaCache.get(key);
+    const modes = [['foot', 'walk'], ['cycling', 'cycle'], ['driving', 'drive']];
+    const out = {};
+    for (const [profile, label] of modes) {
+      try {
+        const r = await X.route([from, to], profile, 15000);
+        // The public router only hosts the car profile, so cap the pace the way
+        // the simulation does rather than reporting a 60 km/h walk.
+        const cap = profile === 'foot' ? 1.4 : profile === 'cycling' ? 5.5 : Infinity;
+        const seconds = Math.max(r.duration, r.distance / cap);
+        out[label] = { seconds, metres: r.distance };
+      } catch (_) {
+        out[label] = null;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    etaCache.set(key, out);
+    return out;
+  }
+
   live.register({
     id: 'bmtc',
     label: 'BMTC buses',
     emoji: '🚌',
-    hint: 'Bengaluru bus routes, their path and their stops, from OpenStreetMap. '
-      + 'Type a route number to draw it. Live vehicle positions are not open — see the note.',
+    hint: 'Bengaluru bus stops and routes from OpenStreetMap. Type a route number to draw it; '
+      + 'stops near you are listed with walking, cycling and driving time.',
     attribution: '&copy; OpenStreetMap contributors',
     needsBounds: true,
-    query: { label: 'BMTC route number', placeholder: 'route number, e.g. 500 or KBS-1' },
+    every: 900,
+    query: { label: 'BMTC route number', placeholder: 'route number, e.g. 500 — or leave empty for stops near you' },
+
     async load(ctx) {
-      const box = bbox(ctx.bounds);
-      const els = await overpass(bmtcQuery(ctx.query, box));
-      const routes = els.filter((e) => e.type === 'relation');
-      if (!routes.length) {
-        return {
-          items: [],
-          note: ctx.query
-            ? `no BMTC route matching "${X.esc(ctx.query)}" mapped in this view`
-            : 'no BMTC routes in this view — try Bengaluru',
-        };
-      }
-
-      // Without geometry there is nothing to draw, so list the routes and say how
-      // to see one.
-      if (!ctx.query) {
-        const named = routes.map((rel) => (rel.tags || {}).ref).filter(Boolean).sort();
-        return {
-          items: [],
-          note: `${routes.length} BMTC routes here — ${named.slice(0, 14).join(', ')}`
-            + `${named.length > 14 ? '…' : ''} · type one above to draw it`,
-        };
-      }
-
-      const items = routes.map((rel) => {
-        const t = rel.tags || {};
-        const shape = routeShape(rel);
-        const stops = routeStops(rel);
-        const first = (shape[0] && shape[0][0]) || (stops[0] && [stops[0].lat, stops[0].lng]);
-        const metres = shape.reduce((sum, line) => sum + Mx.cumulative(
-          line.map(([lat, lng]) => ({ lat, lng })),
-        ).pop(), 0);
-        return {
-          id: `bmtc${rel.id}`,
-          label: `${t.ref || 'route'} · ${t.from || '?'} → ${t.to || '?'}`,
-          lat: first ? first[0] : null,
-          lng: first ? first[1] : null,
-          glyph: '🚌',
-          ref: t.ref || null,
-          shape, stops,
-          detail: X.kv([
-            ['route', X.esc(t.ref || '—')],
-            ['stops', stops.length || null],
-            ['length', metres > 0 ? X.dist(metres) : null],
-          ]) + `<div class="smx-meta">${X.esc(t.name || '')}</div>`
-            + `${t.from || t.to ? `<div class="smx-route"><span class="code">${X.esc(t.from || '?')}</span>`
-              + `<span class="arrow">→</span><span class="code">${X.esc(t.to || '?')}</span></div>` : ''}`
-            + `<div class="smx-meta">OpenStreetMap relation ${rel.id} · no timetable in this source</div>`,
-        };
-      });
-
-      const drawnStops = items.reduce((n, i) => n + i.stops.length, 0);
-      return {
-        items,
-        note: `${items.length} route${items.length > 1 ? 's' : ''}, ${drawnStops} stops`
-          + `${ctx.query ? '' : ' · type a route number to narrow it'}`,
-      };
+      return ctx.query ? loadRoutes(ctx) : loadStops(ctx);
     },
-    /**
-     * The route drawn as it runs, with its stops as small dots and the ends
-     * marked. One colour for every route: these are lines on the ground, not
-     * measurements, and the panel identifies them.
-     */
+    enrich: (item) => enrichStop(item),
+
     draw(items, ctx) {
       for (const item of items) {
-        for (const line of item.shape) {
-          L.polyline(line, {
-            pane: live.rasterPane, color: BUS_COLOR, weight: 4, opacity: 0.85, interactive: true,
-          })
-            .bindTooltip(`🚌 ${X.esc(item.label)}`, { sticky: true })
-            .addTo(ctx.group);
-        }
-        for (const stop of item.stops) {
-          L.circleMarker([stop.lat, stop.lng], {
-            pane: live.pane, radius: 3.2, color: BUS_COLOR, weight: 1.2,
-            fillColor: '#0b0f14', fillOpacity: 0.9,
-          })
-            .bindTooltip(`${stop.seq}. ${X.esc(stop.ref || 'stop')} — ${X.esc(item.ref || '')}`, { direction: 'top' })
-            .addTo(ctx.group);
-        }
-        if (Number.isFinite(item.lat)) {
-          L.marker([item.lat, item.lng], {
-            pane: live.pane, icon: L.divIcon({
-              className: 'smx-live-dot smx-bus', iconSize: [22, 22], iconAnchor: [11, 11],
-              html: '<span class="glyph">🚌</span>',
-            }),
-          })
-            .bindPopup(`<b>🚌 ${X.esc(item.label)}</b><div>${item.detail}</div>`)
-            .addTo(ctx.group);
-        }
+        if (item.kind === 'route') drawRoute(item, ctx);
+        else drawStop(item, ctx);
       }
+    },
+
+    alert: {
+      label: 'I am near a bus stop',
+      defaults: { maxKm: 0.4 },
+      fields: [{ key: 'maxKm', label: 'within km', min: 0.1, max: 3, step: 0.1 }],
+      test: (item, ctx) => {
+        if (item.kind !== 'stop') return null;
+        const d = kmToHome(item);
+        return d !== null && d <= ctx.settings.maxKm
+          ? `${Math.round(d * 1000)} m away${item.routes.length ? `, routes ${item.routes.slice(0, 4).join(', ')}` : ''}`
+          : null;
+      },
+    },
+  });
+
+  /* ------------------------------ stops near me ------------------------------ */
+
+  /** Stops around your location, each knowing which routes serve it. */
+  async function loadStops(ctx) {
+    const at = ctx.home || map.getCenter();
+    const radius = Math.min(4000, Math.max(400, ctx.radiusKm * 1000));
+    const els = await overpass(bmtcStopsQuery(at.lat, at.lng, radius));
+
+    const items = els.filter((e) => e.type === 'node' && Number.isFinite(e.lat)).map((n) => {
+      const t = n.tags || {};
+      const routes = [];
+      const distance = ctx.home ? Mx.haversine(ctx.home, { lat: n.lat, lng: n.lon }) : null;
+      return {
+        id: `stop${n.id}`, kind: 'stop',
+        label: t.name || 'Bus stop',
+        lat: n.lat, lng: n.lon, glyph: '🚏',
+        routes,
+        nodeId: n.id,
+        distance,
+        mappedAt: n.timestamp || null,
+        detail: X.kv([
+          ['from you', distance === null ? null : X.dist(distance)],
+        ]) + (routes.length ? `<div class="smx-meta">${X.esc(routes.slice(0, 12).join(' · '))}`
+          + `${routes.length > 12 ? ` +${routes.length - 12}` : ''}</div>` : '')
+          + (n.timestamp ? `<div class="smx-meta">mapped ${new Date(n.timestamp).toLocaleDateString()}</div>` : '')
+          + '<div class="smx-meta">Tap “times” for walking, cycling and driving time from you.</div>',
+      };
+    }).sort((a, b) => (a.distance === null ? 1 : a.distance) - (b.distance === null ? 1 : b.distance));
+
+    return {
+      items,
+      note: `${items.length} stops within ${X.dist(radius)} · open one for its routes`,
+    };
+  }
+
+  /** The routes at a stop, fetched the moment someone looks at it. */
+  async function enrichStop(item) {
+    if (item.kind !== 'stop' || item.enriched) return false;
+    item.enriched = true;
+    try {
+      const els = await overpass(bmtcRoutesAtStop(item.nodeId));
+      item.routes = [...new Set(els.map((r) => (r.tags || {}).ref).filter(Boolean))].sort();
+    } catch (_) {
+      item.routes = [];
+      item.enriched = false;                   // let a later look try again
+      return false;
+    }
+    item.extra = item.routes.length
+      ? `<div class="smx-meta">routes ${X.esc(item.routes.slice(0, 14).join(' · '))}`
+        + `${item.routes.length > 14 ? ` +${item.routes.length - 14}` : ''}</div>`
+      : '<div class="smx-meta">no bus route in OSM lists this stop</div>';
+    return true;
+  }
+
+  function drawStop(item, ctx) {
+    L.circleMarker([item.lat, item.lng], {
+      pane: live.pane, radius: 4, color: BUS_COLOR, weight: 1.6,
+      fillColor: '#0b0f14', fillOpacity: 0.85,
+    })
+      .bindPopup(() => `<b>🚏 ${X.esc(item.label)}</b><div>${item.detail}</div>`
+        + `<div style="margin-top:6px"><button class="btn" data-bmtc-eta="${X.esc(item.id)}">times from me</button>`
+        + ` <button class="btn" data-smx-track="bmtc|${X.esc(item.id)}">Track</button></div>`)
+      .bindTooltip(`${X.esc(item.label)}${item.distance !== null ? ` · ${X.dist(item.distance)}` : ''}`,
+        { direction: 'top' })
+      .addTo(ctx.group);
+  }
+
+  /* ------------------------------ a whole route ------------------------------ */
+
+  async function loadRoutes(ctx) {
+    const box = bbox(ctx.bounds);
+    const els = await overpass(bmtcQuery(ctx.query, box));
+    const routes = els.filter((e) => e.type === 'relation');
+    if (!routes.length) {
+      return { items: [], note: `no BMTC route matching "${X.esc(ctx.query)}" mapped in this view` };
+    }
+
+    const items = routes.map((rel) => {
+      const t = rel.tags || {};
+      const shape = routeShape(rel);
+      const stops = routeStops(rel);
+      const metres = shape.reduce((sum, line) => sum
+        + (Mx.cumulative(line.map(([lat, lng]) => ({ lat, lng }))).pop() || 0), 0);
+      const first = (shape[0] && shape[0][0]) || (stops[0] && [stops[0].lat, stops[0].lng]);
+      return {
+        id: `bmtc${rel.id}`, kind: 'route',
+        label: `${t.ref || 'route'} · ${t.from || '?'} → ${t.to || '?'}`,
+        lat: first ? first[0] : null,
+        lng: first ? first[1] : null,
+        glyph: '🚌',
+        ref: t.ref || null,
+        shape, stops,
+        mappedAt: rel.timestamp || null,
+        detail: X.kv([
+          ['route', X.esc(t.ref || '—')],
+          ['stops', stops.length || null],
+          ['length', metres > 0 ? X.dist(metres) : null],
+        ])
+          + (t.from || t.to ? `<div class="smx-route"><span class="code">${X.esc(t.from || '?')}</span>`
+            + `<span class="arrow">→</span><span class="code">${X.esc(t.to || '?')}</span></div>` : '')
+          + `<div class="smx-meta">${X.esc(t.name || '')}</div>`
+          + `<div class="smx-meta">OSM relation ${rel.id}`
+          + `${rel.timestamp ? ` · mapped ${new Date(rel.timestamp).toLocaleDateString()}` : ''}`
+          + ' · this source carries no timetable</div>',
+      };
+    });
+
+    return {
+      items,
+      note: `${items.length} route${items.length > 1 ? 's' : ''}, `
+        + `${items.reduce((n, i) => n + i.stops.length, 0)} stops`,
+    };
+  }
+
+  function drawRoute(item, ctx) {
+    for (const line of item.shape) {
+      L.polyline(line, {
+        pane: live.rasterPane, color: BUS_COLOR, weight: 4, opacity: 0.85, interactive: true,
+      }).bindTooltip(`🚌 ${X.esc(item.label)}`, { sticky: true }).addTo(ctx.group);
+    }
+    for (const stop of item.stops) {
+      L.circleMarker([stop.lat, stop.lng], {
+        pane: live.pane, radius: 3.2, color: BUS_COLOR, weight: 1.2,
+        fillColor: '#0b0f14', fillOpacity: 0.9,
+      }).bindTooltip(`${stop.seq}. stop — ${X.esc(item.ref || '')}`, { direction: 'top' }).addTo(ctx.group);
+    }
+    if (Number.isFinite(item.lat)) {
+      L.marker([item.lat, item.lng], {
+        pane: live.pane,
+        icon: L.divIcon({ className: 'smx-live-dot smx-bus', iconSize: [22, 22], iconAnchor: [11, 11],
+          html: '<span class="glyph">🚌</span>' }),
+      }).bindPopup(`<b>🚌 ${X.esc(item.label)}</b><div>${item.detail}</div>`).addTo(ctx.group);
+    }
+  }
+
+  /* --------------------------- times from your place --------------------------- */
+
+  /**
+   * "How long to reach it" answered per mode, in the popup that asked.
+   *
+   * Delegated so the popup stays cheap to open: nothing is routed until the
+   * button is pressed, and the answer is cached per stop.
+   */
+  document.addEventListener('click', async (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('[data-bmtc-eta]');
+    if (!btn) return;
+    const st = live.layerState('bmtc');
+    const item = st && st.items.find((i) => i.id === btn.dataset.bmtcEta);
+    const from = live.observerPoint();
+    if (!item) return;
+    if (!from) { btn.outerHTML = '<div class="smx-meta">Set your location first.</div>'; return; }
+
+    btn.disabled = true;
+    btn.textContent = 'routing…';
+    const times = await travelTimes(from, { lat: item.lat, lng: item.lng });
+    const cells = [
+      ['walk', times.walk], ['cycle', times.cycle], ['drive', times.drive],
+    ].map(([label, t]) => [label, t ? `${Mx.dur(t.seconds)}` : '—']);
+    item.travel = times;
+    btn.outerHTML = X.kv(cells)
+      + `<div class="smx-meta">${times.walk ? X.dist(times.walk.metres) : ''} by road`
+      + ` · straight line ${X.dist(Mx.haversine(from, item))}</div>`;
+  });
+
+  /* ------------------------------ live positions ------------------------------ */
+
+  /**
+   * Where live buses would come from, if there were anywhere to get them.
+   *
+   * BMTC's own endpoints refuse browser requests and send no CORS header, and
+   * there is no open GTFS-Realtime feed for the city, so this is a socket with
+   * nothing plugged into it: paste a URL returning
+   * `[{ id, lat, lng, route, at }]` and the layer will draw and track them. Until
+   * then it says so, which is better than an empty map that looks broken.
+   */
+  live.register({
+    id: 'bmtc-live',
+    label: 'BMTC live buses',
+    emoji: '🛰️',
+    hint: 'No open live feed exists for BMTC — their API blocks browsers. Paste a URL that '
+      + 'returns [{id, lat, lng, route, at}] and this will draw and track them.',
+    attribution: 'operator feed',
+    every: 15,
+    query: { label: 'live feed URL', placeholder: 'https://…/buses.json' },
+    async load(ctx) {
+      if (!ctx.query) {
+        return { items: [], note: 'no feed configured — BMTC publishes none a browser may read' };
+      }
+      const data = await ctx.json(ctx.query, { timeout: 15000 });
+      const rows = Array.isArray(data) ? data : (data.buses || data.vehicles || data.data || []);
+      const items = rows.map((b, i) => {
+        // coord(), not Number(): Number(null) is 0, which would put a bus with no
+        // position off the coast of Africa. Same trap as the CPCB feed.
+        const lat = coord(b.lat !== undefined ? b.lat : b.latitude, 90);
+        const lng = coord(b.lng !== undefined ? b.lng : (b.lon !== undefined ? b.lon : b.longitude), 180);
+        if (lat === null || lng === null) return null;
+        const at = b.at || b.timestamp || b.time || null;
+        return {
+          id: String(b.id || b.vehicleId || b.vehicle_no || i), kind: 'bus',
+          label: `${b.route || b.routeNo || 'bus'} ${b.id || ''}`.trim(),
+          lat, lng, glyph: '🚌',
+          heading: Number.isFinite(Number(b.heading)) ? Number(b.heading) : null,
+          speed: Number.isFinite(Number(b.speed)) ? Number(b.speed) : null,
+          fixAt: at ? new Date(at).valueOf() : Date.now(),
+          detail: X.kv([
+            ['route', X.esc(String(b.route || b.routeNo || '—'))],
+            ['speed', Number.isFinite(Number(b.speed)) ? `${Math.round(Number(b.speed) * 3.6)} km/h` : null],
+            ['fix', at ? new Date(at).toLocaleTimeString() : null],
+          ]),
+        };
+      }).filter(Boolean);
+      return { items, note: `${items.length} buses from your feed` };
     },
   });
 

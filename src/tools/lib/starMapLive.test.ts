@@ -240,8 +240,10 @@ const fetchMock = vi.fn(async (url: string, init?: any) => {
     : u.includes("earthquake.usgs.gov") ? fixtures.quakes
     : u.includes("rainviewer") ? fixtures.radar
     : u.includes("api.weather.gov") ? fixtures.nws
+    : u.includes("example.test/buses.json") ? fixtures.busFeed
     : u.includes("overpass")
-      ? (String(init && init.body).includes("BMTC") ? fixtures.overpassBmtc
+      // The body is form-encoded, so decode before matching: "around:" arrives as "around%3A".
+      ? (/BMTC|rel\(bn|around:/.test(decodeURIComponent(String(init && init.body))) ? fixtures.overpassBmtc
         : String(init && init.body).includes("railway") ? fixtures.overpassTransport : fixtures.overpassPlaces)
     : u.includes("marine-api") ? fixtures.marine
     : u.includes("api.nasa.gov") ? fixtures.neows
@@ -325,7 +327,7 @@ describe("live framework", () => {
   it("registers every layer in the order they are declared", () => {
     expect(live().layers.map((l: any) => l.id)).toEqual([
       "satellites", "aircraft", "earthquakes", "radar", "weather-alerts",
-      "transport", "places", "bmtc", "ocean", "asteroids", "launches",
+      "transport", "places", "bmtc", "bmtc-live", "ocean", "asteroids", "launches",
       "fires", "cpcb-aqi", "internet", "gibs",
     ]);
     expect(live().layers.every((l: any) => l.emoji && l.hint)).toBe(true);
@@ -1771,7 +1773,7 @@ describe("BMTC buses", () => {
   it("says plainly that this source carries no timetable", async () => {
     stateOf("bmtc").query = "500";
     const st = await load("bmtc");
-    expect(st.items[0].detail).toContain("no timetable in this source");
+    expect(st.items[0].detail).toContain("carries no timetable");
     expect(st.items[0].detail).toContain("relation 987654");
   });
 
@@ -1802,5 +1804,107 @@ describe("BMTC buses", () => {
     expect(st.items).toHaveLength(0);
     expect(st.note).toContain('no BMTC route matching "999X"');
     fixtures.overpassBmtc = real;
+  });
+});
+
+describe("BMTC stops near me", () => {
+  /** Stops plus the route relations that contain them, as `rel(bn)` returns them. */
+  const STOPS = () => ({
+    elements: [
+      { type: "node", id: 11, lat: 12.9740, lon: 77.5950, timestamp: "2025-11-02T10:00:00Z",
+        tags: { highway: "bus_stop", name: "Corporation Circle" } },
+      { type: "node", id: 12, lat: 12.9800, lon: 77.6100, timestamp: "2024-06-01T10:00:00Z",
+        tags: { highway: "bus_stop", name: "Richmond Circle" } },
+      { type: "node", id: 13, lat: 12.9500, lon: 77.5700, tags: { highway: "bus_stop" } },
+      { type: "relation", id: 900, tags: { route: "bus", ref: "500D", operator: "BMTC" },
+        members: [{ type: "node", ref: 11 }, { type: "node", ref: 12 }] },
+      { type: "relation", id: 901, tags: { route: "bus", ref: "201R", operator: "BMTC" },
+        members: [{ type: "node", ref: 11 }] },
+    ],
+  });
+
+  beforeEach(() => {
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+    stateOf("bmtc").query = "";
+    fixtures.overpassBmtc = STOPS();
+  });
+  afterEach(async () => { await live().setLayer("bmtc", false); });
+
+  it("lists stops nearest first, with the distance from me", async () => {
+    const st = await load("bmtc");
+    expect(st.items.map((i: any) => i.label))
+      .toEqual(["Corporation Circle", "Richmond Circle", "Bus stop"]);
+    expect(st.items[0].distance).toBeLessThan(st.items[1].distance);
+    expect(st.items[0].detail).toContain("<small>from you</small>");
+    expect(st.note).toContain("stops within");
+  });
+
+  it("fetches the routes at a stop only when the stop is opened", async () => {
+    const st = await load("bmtc");
+    expect(st.items[0].routes).toEqual([]);                 // nothing asked for yet
+    expect(st.note).toContain("open one for its routes");
+
+    // The per-stop query is a different, much smaller one.
+    fixtures.overpassBmtc = { elements: [
+      { type: "relation", id: 900, tags: { route: "bus", ref: "500D" } },
+      { type: "relation", id: 901, tags: { route: "bus", ref: "201R" } },
+    ] };
+    const layer = live().layers.find((l: any) => l.id === "bmtc");
+    expect(await live().enrichItem(layer, st.items[0])).toBe(true);
+    expect(st.items[0].routes).toEqual(["201R", "500D"]);   // sorted
+    expect(st.items[0].extra).toContain("500D");
+  });
+
+  it("carries how fresh the mapping is, where OSM says", async () => {
+    const st = await load("bmtc");
+    expect(st.items[0].mappedAt).toBe("2025-11-02T10:00:00Z");
+    expect(st.items[0].detail).toContain("mapped");
+    expect(st.items[2].mappedAt).toBeNull();                // no timestamp, no claim
+  });
+
+  it("draws a dot per stop, and each one can be tracked", async () => {
+    const st = await load("bmtc");
+    const drawn = st.group.getLayers();
+    expect(drawn.filter((l: any) => l.kind === "circleMarker")).toHaveLength(3);
+    expect(String(drawn[0]._popup())).toContain("data-smx-track=\"bmtc|stop11\"");
+    expect(String(drawn[0]._popup())).toContain("data-bmtc-eta=\"stop11\"");
+  });
+
+  it("alerts when I am beside a stop, naming its routes", async () => {
+    const st = await load("bmtc");
+    live().state.alerts = [];
+    live().state.alerted = new Set();
+    Object.assign(st.alert, { on: true, maxKm: 0.5 });
+    live().evaluateAlerts("bmtc");
+    expect(live().state.alerts).toHaveLength(1);
+    expect(live().state.alerts[0].why).toContain("m away");
+  });
+});
+
+describe("BMTC live buses", () => {
+  afterEach(async () => { await live().setLayer("bmtc-live", false); });
+
+  it("says there is no feed rather than showing an empty map", async () => {
+    stateOf("bmtc-live").query = "";
+    const st = await load("bmtc-live");
+    expect(st.items).toHaveLength(0);
+    expect(st.note).toContain("no feed configured");
+    expect(st.error).toBeNull();
+  });
+
+  it("draws and tracks buses from a feed that is given one", async () => {
+    fixtures.busFeed = [
+      { id: "KA01F1234", route: "500D", lat: 12.98, lng: 77.6, speed: 8, heading: 90, at: "2026-08-12T11:00:00Z" },
+      { id: "KA01F9999", route: "201R", latitude: 12.99, longitude: 77.61 },
+      { id: "bad", lat: null, lng: null },
+    ];
+    stateOf("bmtc-live").query = "https://example.test/buses.json";
+    const st = await load("bmtc-live");
+    expect(st.items).toHaveLength(2);                       // the positionless one is dropped
+    expect(st.items[0].label).toBe("500D KA01F1234");
+    expect(st.items[0].fixAt).toBe(new Date("2026-08-12T11:00:00Z").valueOf());
+    expect(st.items[0].detail).toContain("29 km/h");        // 8 m/s
+    expect(st.items[1].lat).toBeCloseTo(12.99, 4);          // latitude/longitude spelling
+    expect(st.note).toBe("2 buses from your feed");
   });
 });
