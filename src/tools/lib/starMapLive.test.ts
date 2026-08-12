@@ -11,7 +11,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 /* ------------------------------ Leaflet stub ------------------------------ */
 
 const layers: any[] = [];
-const panes: Record<string, HTMLElement> = {};
+// Leaflet's own panes exist before any add-on runs, so the stub provides them.
+const panes: Record<string, HTMLElement> = {
+  popupPane: document.createElement("div"),
+  tooltipPane: document.createElement("div"),
+  markerPane: document.createElement("div"),
+};
 
 function makeLayer(kind: string, extra: Record<string, any> = {}) {
   const layer: any = {
@@ -59,6 +64,7 @@ const mapStub: any = {
   _layers: new Set<any>(),
   _zoom: 13,
   createPane(name: string) { return (panes[name] = document.createElement("div")); },
+  getPane(name: string) { return panes[name]; },
   addLayer(l: any) { this._layers.add(l); return this; },
   removeLayer(l: any) { this._layers.delete(l); return this; },
   hasLayer(l: any) { return this._layers.has(l); },
@@ -1141,6 +1147,42 @@ describe("clicking an object to track it", () => {
     expect(marker._icon_className || marker._lastIcon?.className || "").toBeDefined();
     // The icon is rebuilt with the tracked flag; the framework's own view agrees.
     expect(live().isTracking("aircraft", "abc123")).toBe(true);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("opens a popup with a GPS fix and no saved location", async () => {
+    // This threw "Cannot read properties of null (reading 'label')": the distance
+    // came from the GPS fix while the popup still named live.home, which was null.
+    live().state.home = null;
+    if (live().state.homeMarker) { live().state.homeMarker.remove(); live().state.homeMarker = null; }
+    appState.gpsOn = true;
+    appState.lastFix = { lat: 12.9716, lng: 77.5946, accuracy: 8 };
+    await load("aircraft");
+
+    const marker = stateOf("aircraft").markers.get("abc123");
+    expect(() => marker.openPopup()).not.toThrow();
+    expect(marker._popupContent).toContain("AI101");
+    expect(marker._popupContent).toContain("from GPS");
+    expect(marker._popupContent).toContain("data-smx-track");
+
+    // And the button still works with no saved location at all.
+    const popup = openPopupFor("aircraft", "abc123");
+    (popup.querySelector("[data-smx-track]") as HTMLButtonElement).click();
+    expect(live().isTracking("aircraft", "abc123")).toBe(true);
+
+    appState.gpsOn = false;
+    appState.lastFix = null;
+    await live().setLayer("aircraft", false);
+  });
+
+  it("opens a popup with neither a fix nor a location, just without a distance", async () => {
+    live().state.home = null;
+    appState.gpsOn = false;
+    appState.lastFix = null;
+    await load("aircraft");
+    const marker = stateOf("aircraft").markers.get("abc123");
+    expect(() => marker.openPopup()).not.toThrow();
+    expect(marker._popupContent).not.toContain("from");
     await live().setLayer("aircraft", false);
   });
 

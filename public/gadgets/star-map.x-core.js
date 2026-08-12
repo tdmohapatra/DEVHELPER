@@ -170,6 +170,19 @@ window.SMX = (function () {
     pane.style.zIndex = String(z);
     if (name !== 'agent') pane.style.pointerEvents = 'none';
   }
+  /**
+   * Popups and tooltips have to sit above every panel, not just above the map.
+   *
+   * Leaflet puts them at z-index 700, while the Map Lab panel is at 1450 and the
+   * app's own sheet at 2000 — so a popup for anything behind those (most of the
+   * left and right edges of the screen) opened invisible and unclickable, which
+   * looked exactly like the marker ignoring the click.
+   */
+  const popupPane = map.getPane('popupPane');
+  if (popupPane) popupPane.style.zIndex = '2100';
+  const tooltipPane = map.getPane('tooltipPane');
+  if (tooltipPane) tooltipPane.style.zIndex = '2050';
+
   const renderers = {
     glow: L.svg({ pane: 'smx-glow', padding: 0.5 }),
     line: L.svg({ pane: 'smx-line', padding: 0.5 }),
@@ -690,7 +703,7 @@ window.SMX = (function () {
   /* --------------------------- drag / mark modes --------------------------- */
 
   /**
-   * Two explicit map modes, toggled by double-click.
+   * Two explicit map modes, toggled by a triple-click.
    *
    *   drag — pan and zoom only. A stray tap does nothing.
    *   mark — a tap drops a waypoint, and the route recalculates.
@@ -700,16 +713,16 @@ window.SMX = (function () {
    * route depending on a setting three panels deep. Same switch, but driven by a
    * gesture and shown in the HUD, so the map always tells you what a tap will do.
    *
-   * Double-click zoom is given up for this deliberately — the +/- buttons, the
-   * wheel and pinch all still zoom.
+   * Three clicks rather than two, so double-click keeps its usual job of zooming
+   * in and a double-click aimed at an object cannot flip the mode by accident.
    */
   let mode = 'drag';
 
   const modePill = el(`
     <div class="hud-pill smx-mode" id="smxMode" role="button" tabindex="0"
-         title="Double-click the map (or click here) to switch between dragging and marking points">
+         title="Triple-click the map (or click here) to switch between dragging and marking points">
       <span class="smx-mode-dot"></span><b id="smxModeLabel">Drag</b>
-      <span class="sep"></span><small id="smxModeHint">double-click to mark points</small>
+      <span class="sep"></span><small id="smxModeHint">triple-click to mark points</small>
     </div>`);
   const hud = document.querySelector('.hud');
   if (hud) hud.appendChild(modePill);
@@ -728,7 +741,7 @@ window.SMX = (function () {
     const label = modePill.querySelector('#smxModeLabel');
     const hint = modePill.querySelector('#smxModeHint');
     if (label) label.textContent = marking ? 'Mark' : 'Drag';
-    if (hint) hint.textContent = marking ? 'tap adds a point · double-click to stop' : 'double-click to mark points';
+    if (hint) hint.textContent = marking ? 'tap adds a point · triple-click to stop' : 'triple-click to mark points';
     if (!quiet) {
       notify(marking
         ? 'Mark mode — tap the map to add points. Double-click to go back to dragging.'
@@ -744,34 +757,91 @@ window.SMX = (function () {
   });
 
   /**
-   * The app adds a waypoint on `click`, and a double-click fires `click` first —
-   * so leaving mark mode would strand the point that started the gesture. There
-   * is no way to cancel the app's handler from here, so undo it instead: wrap
-   * addWaypoint to remember the last one, and drop it if a double-click follows
-   * immediately.
+   * The app adds a waypoint on `click`, so in mark mode the three clicks of the
+   * gesture would leave three points behind. There is no way to cancel the app's
+   * handler from here, so undo them instead: wrap addWaypoint to remember what
+   * was added and when, and drop anything added during the gesture.
    */
-  let lastAdd = null;
+  const GESTURE_MS = 800;                 // how long three clicks may take
+  let recentAdds = [];
+
   if (typeof window.addWaypoint === 'function') {
     const nativeAdd = window.addWaypoint;
     window.addWaypoint = function wrappedAddWaypoint() {
       const out = nativeAdd.apply(this, arguments);
       const wp = S.waypoints && S.waypoints[S.waypoints.length - 1];
-      lastAdd = wp ? { id: wp.id, at: Date.now() } : null;
+      if (wp) recentAdds.push({ id: wp.id, at: Date.now() });
+      recentAdds = recentAdds.filter((a) => Date.now() - a.at < 2000);
       return out;
     };
   }
 
-  const DBLCLICK_MS = 450;
+  /**
+   * Remove whatever one particular gesture put on the map.
+   *
+   * Scoped to the gesture's own start time rather than "anything recent": the
+   * sweep also runs on a short timer, and a timer left over from an earlier
+   * gesture must never delete a point the user has since placed deliberately.
+   */
+  function undoGestureAdds(since, until) {
+    if (typeof removeWaypoint !== 'function') return;
+    const from = since === undefined ? Date.now() - (GESTURE_MS + 200) : since;
+    // Bounded at both ends: a sweep scheduled by one gesture must not reach
+    // forward into points placed after it, however late its timer fires.
+    const to = until === undefined ? Date.now() : until;
+    const doomed = recentAdds.filter((a) => a.at >= from && a.at <= to);
+    for (const add of doomed) removeWaypoint(add.id);
+    recentAdds = recentAdds.filter((a) => !doomed.includes(a));
+  }
 
-  map.on('dblclick', (e) => {
-    if (e && e.originalEvent) L.DomEvent.stop(e);          // absent when fired programmatically
-    if (lastAdd && Date.now() - lastAdd.at < DBLCLICK_MS && typeof removeWaypoint === 'function') {
-      removeWaypoint(lastAdd.id);
-      lastAdd = null;
-    }
+  /**
+   * Counted on the container in the capture phase, not on Leaflet's own map
+   * click.
+   *
+   * In mark mode the first click drops a pin, and the pin then swallows the
+   * second and third — Leaflet does not forward a click on a marker to the map,
+   * so the gesture died halfway and left the stray point behind. Watching the
+   * container sees every click wherever it lands.
+   *
+   * Clicks inside a popup or a control are excluded: pressing Track in a popup
+   * three times must not flip the mode underneath it.
+   */
+  let clickTimes = [];
+  const GESTURE_IGNORE = '.leaflet-popup, .leaflet-control, .smx, .sheet, .fabs, .hud';
+
+  map.getContainer().addEventListener('click', (e) => {
+    if (e.target && e.target.closest && e.target.closest(GESTURE_IGNORE)) return;
+    const now = Date.now();
+    clickTimes = clickTimes.filter((t) => now - t < GESTURE_MS);
+    clickTimes.push(now);
+    if (clickTimes.length < 3) return;
+    const gestureStart = clickTimes[0];
+    clickTimes = [];
+
+    // Stop this one click going any further. The mode changes in the capture
+    // phase, so without this Leaflet would handle the very same click with
+    // marking freshly switched on and drop a stray pin. Only this click is
+    // swallowed — the next one is a normal click again.
+    e.stopPropagation();
+    e.preventDefault();
+    undoGestureAdds(gestureStart);
     toggleMode();
-  });
-  if (map.doubleClickZoom) map.doubleClickZoom.disable();
+
+    // Switching into mark mode, hold the app's own marking off for a beat.
+    // Leaflet raises its map click from this same gesture through a path a DOM
+    // stopPropagation does not always reach, and that straggler would land with
+    // marking freshly on — dropping a pin nobody asked for. Cheaper and more
+    // certain than trying to undo it afterwards.
+    if (getMode() === 'mark' && S && S.prefs) {
+      S.prefs.tapAdd = false;
+      // Only re-arm; no deferred cleanup. Holding the setting is enough to stop
+      // the straggler, and a timed sweep could only ever reach forward into
+      // points placed after this gesture — which is worse than the problem.
+      setTimeout(() => { if (getMode() === 'mark') S.prefs.tapAdd = true; }, 300);
+    }
+  }, true);
+  // Double-click keeps its usual meaning now that the gesture is three clicks.
+  if (map.doubleClickZoom) map.doubleClickZoom.enable();
 
   // Start in drag mode whatever the stored preference was, so the pill and the
   // map always agree on the first tap of a session.
@@ -866,7 +936,7 @@ window.SMX = (function () {
     FlowRoute, route, waypoints, decorateAppRoute, clearAppRoute,
     appRouteLayer: () => appRoute,
     panel, body, registerTab, selectTab, toggle, setClickMode, onPick, pickPoint,
-    setMode, toggleMode, getMode,
+    setMode, toggleMode, getMode, undoGestureAdds,
     isOpen: () => !panel.classList.contains('hidden'),
   };
 })();

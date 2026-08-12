@@ -123,6 +123,9 @@
 
   /* ------------------------------ location ------------------------------ */
 
+  /** True when we know where the user is, by GPS or by a saved location. */
+  const haveObserver = () => !!observerPoint();
+
   function setHome(latlng, label) {
     live.home = { lat: latlng.lat, lng: latlng.lng, label: label || 'My location' };
     drawHome();
@@ -140,7 +143,9 @@
       live.homeMarker = L.marker(at, {
         pane: 'smx-live', zIndexOffset: 900,
         icon: L.divIcon({ className: 'smx-home', iconSize: [26, 26], iconAnchor: [13, 13], html: '<span>◉</span>' }),
-      }).addTo(map).bindTooltip(() => `${X.esc(live.home.label)}<br>${live.home.lat.toFixed(4)}, ${live.home.lng.toFixed(4)}`);
+      }).addTo(map).bindTooltip(() => (live.home
+        ? `${X.esc(live.home.label)}<br>${live.home.lat.toFixed(4)}, ${live.home.lng.toFixed(4)}`
+        : 'Your location'));
       live.homeCircle = L.circle(at, {
         pane: 'smx-live-raster', radius: live.radiusKm * 1000,
         color: X.ANNOTATION, weight: 1.5, dashArray: '6 6', fillColor: X.ANNOTATION, fillOpacity: 0.05,
@@ -160,6 +165,28 @@
       { enableHighAccuracy: true, timeout: 12000 },
     );
   }
+
+  /**
+   * The app publishes GPS fixes into its own state with no event to listen for,
+   * so check now and then. A fix that has actually moved redraws the lines to
+   * every tracked object, re-times the tracks, and lets any layer that was
+   * waiting for a location try again.
+   */
+  let lastSeenFix = null;
+  setInterval(() => {
+    const fix = gpsFix();
+    const changed = (!fix && lastSeenFix) || (fix && !lastSeenFix)
+      || (fix && lastSeenFix && Mx.haversine(fix, lastSeenFix) > 5);
+    if (!changed) return;
+    lastSeenFix = fix ? { lat: fix.lat, lng: fix.lng } : null;
+    drawGpsLines();
+    updateTracks();
+    for (const layer of live.layers) {
+      const st = live.state[layer.id];
+      if (layer.needsHome && st.on && (!st.items.length || st.error)) refresh(layer.id);
+    }
+    renderPanel();
+  }, 5000);
 
   /* ------------------------------ registry ------------------------------ */
 
@@ -216,7 +243,7 @@
     const layer = live.layers.find((l) => l.id === id);
     const st = live.state[id];
     if (!layer || !st || !st.on || st.busy) return;
-    if (layer.needsHome && !live.home) {
+    if (layer.needsHome && !haveObserver()) {
       st.error = 'needs a location';
       renderPanel();
       return;
@@ -270,7 +297,7 @@
   function context(layer) {
     const st = live.state[layer.id];
     return {
-      layer, state: st, group: st.group, map, home: live.home,
+      layer, state: st, group: st.group, map, home: observerPoint(),
       radiusKm: live.radiusKm, bounds: boundsBox(), json: X.json,
       icon: (item, tracked) => liveIcon(layer, item, tracked),
       isTracked: (item) => isTracking(layer.id, item.id),
@@ -336,7 +363,8 @@
     const d = distanceToHome(item);
     return `<b>${layer.emoji} ${X.esc(item.label || item.id)}</b>
       ${item.detail ? `<div style="margin-top:4px">${item.detail}</div>` : ''}
-      ${d !== null ? `<div style="margin-top:4px">${km(d)} from ${X.esc(live.home.label)}</div>` : ''}
+      ${d !== null && observerPoint()
+        ? `<div style="margin-top:4px">${km(d)} from ${X.esc(observerPoint().label || 'your location')}</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:6px">
         <button class="btn" data-smx-track="${X.esc(layer.id)}|${X.esc(String(item.id))}">
           ${isTracking(layer.id, item.id) ? 'Stop tracking' : 'Track'}
@@ -881,7 +909,7 @@
    * time window) through `alert.test`.
    */
   function evaluateAlerts(onlyId) {
-    if (!live.home) return;
+    if (!observerPoint()) return;      // a live GPS fix counts as "where I am" too
     const layers = live.layers.filter((l) => l.alert && live.state[l.id].on && live.state[l.id].alert.on
       && (!onlyId || l.id === onlyId));
     for (const layer of layers) {
@@ -1047,6 +1075,7 @@
           — the dashed outline on the map.</div>` : ''}` : ''}`;
     host.innerHTML += `
       ${live.home ? `<div class="smx-mono">${X.esc(live.home.label)} · ${live.home.lat.toFixed(4)}, ${live.home.lng.toFixed(4)}</div>`
+        : fix ? '<div class="smx-hint">Using the live GPS fix above. Set a location too if you want one that stays put.</div>'
         : '<div class="smx-hint">No location set. Everything that needs a distance from you is off until there is one.</div>'}
       <div class="smx-btns" style="margin-top:6px">
         <button class="smx-btn" id="smxHomeGps">${X.icon('crosshair')} GPS</button>
@@ -1337,7 +1366,7 @@
           <small class="smx-hint" style="margin:0">${ago(a.at)}</small>
           ${Number.isFinite(a.lat) ? `<button class="smx-btn" data-alert-go="${i}" title="Show on the map">${X.icon('pin')}</button>` : ''}
         </div>`).join('')
-        : `<div class="smx-hint">${live.home ? 'No alerts yet.' : 'Set a location first — alerts are all "near me".'}</div>`}`;
+        : `<div class="smx-hint">${observerPoint() ? 'No alerts yet.' : 'Set a location first — alerts are all "near me".'}</div>`}`;
     host.querySelector('#smxMute').addEventListener('change', (e) => { live.muted = e.target.checked; save(); });
     host.querySelector('#smxAlertClear').addEventListener('click', () => {
       live.alerts = [];
@@ -1364,7 +1393,7 @@
   X.live = {
     state: live,
     get tracks() { return live.tracks; },
-    trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks,
+    trackKey, isTracking, updateTracks, exportTrack, trackedItem, forgetTrack, forgetAllTracks, haveObserver,
     refreshMarker,
     setReplay, setReplayTime, playReplay, pauseReplay, replayWindow, hoverInfo,
     drawGpsLines, observerPoint, gpsFix,

@@ -114,6 +114,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
     each tracked object gets its own line back to you, and the area you and they
     span is outlined and measured.
 
+### Fixed — the class of bug behind "clicking the plane does nothing"
+- **Popups opened behind the panels.** Leaflet puts them at z-index 700 while the
+  Map Lab panel sits at 1450 and the app's own sheet at 2000, so a popup for
+  anything near the left or right edge of the screen was invisible and
+  unclickable — indistinguishable from the marker ignoring the click. Popups and
+  tooltips now sit above both.
+- **One source of truth for "where I am".** Distances came from a helper that
+  prefers a live GPS fix, while the popup, the alert gate, the layer context and
+  the needsHome check still read the saved location directly. With GPS on and no
+  saved location that is null: clicking an aircraft threw "Cannot read properties
+  of null (reading 'label')", and the NOAA and RIPE layers refused to load while
+  the GPS knew exactly where we were. Everything reads the observer now, and a
+  fix that moves redraws the lines and retries any layer that was waiting.
+- **The mode gesture is a triple-click**, so double-click keeps zooming and a
+  double-click aimed at an object cannot flip the mode by accident. It is counted
+  on the map container, because in mark mode the pin dropped by the first click
+  swallowed the second and third and the gesture died half way. The click that
+  completes it cannot also drop a pin.
+- **`scripts/stress-map-lab.mjs`** — drives every layer, click, hover, mode,
+  replay and export against a real browser and fails on any console error. It
+  found the stray-pin and gesture faults above.
+
 ### Changed
 - **CSP widened** for the map: `img-src` now allows any HTTPS image (tiles), and
   `connect-src` names the routing, geocoding, elevation, weather, geology and

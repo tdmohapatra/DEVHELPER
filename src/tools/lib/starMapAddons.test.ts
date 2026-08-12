@@ -52,7 +52,12 @@ function makeGroup(children: any[] = []) {
   });
 }
 
-const panes: Record<string, HTMLElement> = {};
+// Leaflet's own panes exist before any add-on runs, so the stub provides them.
+const panes: Record<string, HTMLElement> = {
+  popupPane: document.createElement("div"),
+  tooltipPane: document.createElement("div"),
+  markerPane: document.createElement("div"),
+};
 
 const mapStub: any = {
   _handlers: {} as Record<string, Function[]>,
@@ -246,7 +251,7 @@ describe("add-on shell", () => {
   });
 
   it("creates its own map panes so lines stack under markers", () => {
-    expect(Object.keys(panes).sort()).toEqual(["smx-agent", "smx-deco", "smx-glow", "smx-line"]);
+    expect(Object.keys(panes)).toEqual(expect.arrayContaining(["smx-agent", "smx-deco", "smx-glow", "smx-line"]));
     expect(panes["smx-line"].style.pointerEvents).toBe("none");
     expect(panes["smx-agent"].style.pointerEvents).toBe("");
   });
@@ -549,45 +554,104 @@ describe("drag and mark modes", () => {
     expect(pill.classList.contains("marking")).toBe(false);
   });
 
-  it("gives up the map's double-click zoom, since double-click switches mode", () => {
-    expect(mapStub.doubleClickZoom.enabled).toBe(false);
+  it("keeps the map's own double-click zoom, because the gesture is three clicks", () => {
+    expect(mapStub.doubleClickZoom.enabled).toBe(true);
   });
 
-  it("double-clicking the map turns marking on, and again turns it off", () => {
-    mapStub.fire("dblclick", { latlng: { lat: 12.9, lng: 77.6 } });
+  it("triple-clicking the map turns marking on, and again turns it off", async () => {
+    const tripleClick = () => {
+      const map = document.getElementById("map")!;
+      for (let i = 0; i < 3; i++) map.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    };
+    tripleClick();
     expect(SMX().getMode()).toBe("mark");
-    expect(appState.prefs.tapAdd).toBe(true);
     expect($("#smxModeLabel")!.textContent).toBe("Mark");
+    // The app's own marking is held off for 300 ms so the click that completed
+    // the gesture cannot also drop a pin; it arms itself just after.
+    expect(appState.prefs.tapAdd).toBe(false);
+    await tick(360);
+    expect(appState.prefs.tapAdd).toBe(true);
     expect($("#smxMode")!.classList.contains("marking")).toBe(true);
     expect($("#smxModeHint")!.textContent).toContain("tap adds a point");
 
-    mapStub.fire("dblclick", { latlng: { lat: 12.9, lng: 77.6 } });
+    tripleClick();
     expect(SMX().getMode()).toBe("drag");
     expect(appState.prefs.tapAdd).toBe(false);
   });
 
-  it("undoes the point the exiting double-click just added", () => {
+  it("leaves the mode alone for one or two clicks", () => {
+    const before = SMX().getMode();
+    const map = document.getElementById("map")!;
+    const tap = () => map.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    tap();
+    expect(SMX().getMode()).toBe(before);
+    tap();
+    expect(SMX().getMode()).toBe(before);           // a double-click still just zooms
+    tap();
+    expect(SMX().getMode()).not.toBe(before);       // only the third click switches
+    SMX().setMode(before);
+  });
+
+  it("counts a click that lands on a marker, since a fresh pin covers the map", () => {
+    const before = SMX().getMode();
+    const map = document.getElementById("map")!;
+    const pin = document.createElement("div");
+    pin.className = "leaflet-marker-icon";
+    map.appendChild(pin);
+    for (let i = 0; i < 3; i++) pin.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(SMX().getMode()).not.toBe(before);
+    pin.remove();
+    SMX().setMode(before);
+  });
+
+  it("ignores clicks inside a popup or a panel, which must not flip the mode", () => {
+    const before = SMX().getMode();
+    const map = document.getElementById("map")!;
+    const popup = document.createElement("div");
+    popup.className = "leaflet-popup";
+    map.appendChild(popup);
+    const button = document.createElement("button");
+    popup.appendChild(button);
+    for (let i = 0; i < 4; i++) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(SMX().getMode()).toBe(before);
+    popup.remove();
+  });
+
+  it("puts popups above the panels, so one behind them is still usable", () => {
+    // Leaflet's default is 700, under the lab panel (1450) and the app sheet (2000).
+    expect(panes.popupPane.style.zIndex).toBe("2100");
+    expect(panes.tooltipPane.style.zIndex).toBe("2050");
+  });
+
+  it("undoes the points its own three clicks just added", () => {
     SMX().setMode("mark");
-    // The app adds on click, and a double-click delivers a click first.
+    removeWaypointSpy.mockClear();
     const before = appState.waypoints.length;
-    (globalThis as any).addWaypoint(12.9, 77.6, "stray");
-    expect(appState.waypoints).toHaveLength(before + 1);
-    mapStub.fire("dblclick", { latlng: { lat: 12.9, lng: 77.6 } });
-    expect(removeWaypointSpy).toHaveBeenCalledWith("wp-stray");
+    // In mark mode the app adds a waypoint per click, so the gesture leaves three.
+    const mapEl = document.getElementById("map")!;
+    for (const name of ["g1", "g2", "g3"]) {
+      (globalThis as any).addWaypoint(12.9, 77.6, name);
+      mapEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+    expect(removeWaypointSpy).toHaveBeenCalledWith("wp-g1");
+    expect(removeWaypointSpy).toHaveBeenCalledWith("wp-g3");
     expect(appState.waypoints).toHaveLength(before);
     expect(SMX().getMode()).toBe("drag");
   });
 
-  it("keeps a point that was added well before the double-click", async () => {
+  it("keeps points that were added before the gesture began", async () => {
     removeWaypointSpy.mockClear();
     SMX().setMode("mark");
     (globalThis as any).addWaypoint(12.8, 77.5, "kept");
-    // Real time, not a mocked clock: faking Date here also stalls the route
-    // draw-in animation, which runs off requestAnimationFrame.
-    await tick(500);                              // longer than the 450 ms gesture window
-    mapStub.fire("dblclick", { latlng: { lat: 12.8, lng: 77.5 } });
-    expect(removeWaypointSpy).not.toHaveBeenCalled();
+    // Real time, not a mocked clock: faking Date also stalls the route draw-in
+    // animation, which runs off requestAnimationFrame.
+    await tick(1100);                             // older than the gesture window
+    const mapEl2 = document.getElementById("map")!;
+    for (let i = 0; i < 3; i++) mapEl2.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick(400);                               // let the deferred sweep run too
+    expect(removeWaypointSpy).not.toHaveBeenCalledWith("wp-kept");
     expect(appState.waypoints.some((w: any) => w.id === "wp-kept")).toBe(true);
+    SMX().setMode("drag");
   });
 
   it("persists the switch and keeps the app's own settings checkbox in step", () => {
