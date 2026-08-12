@@ -235,8 +235,12 @@
       const radiusNm = Math.max(10, Math.min(250, Math.round(spanNm)));
       const data = await ctx.json(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/${radiusNm}`,
         { timeout: 25000 });
-      const FT = 0.3048, KT = 0.514444;
+      const FT = 0.3048;
       const previous = new Map((ctx.state.items || []).map((i) => [i.id, i]));
+      // The feed stamps its own clock and how stale each position is. At 900 km/h
+      // a second of age is 250 metres of error, so it is worth carrying rather
+      // than pretending every fix is "now".
+      const serverNow = Number.isFinite(data.now) ? data.now : Date.now();
       const items = (data.ac || []).map((a) => {
         if (!Number.isFinite(a.lat) || !Number.isFinite(a.lon)) return null;
         const onGround = a.alt_baro === 'ground';
@@ -250,6 +254,11 @@
           speed,
           heading: Number.isFinite(a.track) ? a.track : null,
           glyph: '✈️',
+          positionAge: Number.isFinite(a.seen_pos) ? a.seen_pos : null,
+          signalAge: Number.isFinite(a.seen) ? a.seen : null,
+          fixAt: Number.isFinite(a.seen_pos) ? serverNow - a.seen_pos * 1000 : serverNow,
+          // How far it could have moved since that position was broadcast.
+          staleBy: Number.isFinite(a.seen_pos) && Number.isFinite(a.gs) ? a.seen_pos * a.gs * KT : null,
           ...(() => {
             const mil = classifyAircraft(a);
             if (!mil) return {};
@@ -285,7 +294,12 @@
             ['vertical', Number.isFinite(a.baro_rate) && Math.abs(a.baro_rate) > 100
               ? (a.baro_rate > 0 ? 'climbing' : 'descending') : null],
             ['squawk', a.squawk ? X.esc(a.squawk) : null],
-          ]),
+            ['position', Number.isFinite(a.seen_pos)
+              ? `${a.seen_pos < 10 ? a.seen_pos.toFixed(1) : Math.round(a.seen_pos)} s old` : null],
+          ]) + (Number.isFinite(a.seen_pos) ? `<div class="smx-meta">`
+            + `broadcast ${new Date(serverNow - a.seen_pos * 1000).toLocaleTimeString()}`
+            + `${Number.isFinite(a.gs) ? ` · up to ${X.dist(a.seen_pos * a.gs * KT)} on from there` : ''}`
+            + `</div>` : ''),
         };
       }).filter(Boolean);
       return { items, note: `${radiusNm} nm around the view centre` };
@@ -482,6 +496,8 @@
     adsbCache.set(key, { at: Date.now(), data });
     return data;
   }
+
+  const KT = 0.514444;                      // knots to metres per second
 
   const airportLabel = (a) => (a
     ? `${X.esc(a.iata_code || a.icao_code || '?')} ${X.esc(a.municipality || a.name || '')}`.trim()

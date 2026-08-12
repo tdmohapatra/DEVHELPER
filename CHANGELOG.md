@@ -123,6 +123,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
     Navy, CG for the Coast Guard) — and the reason it matched is shown, because
     this is a judgement from public patterns, not an official list. Its green is
     deliberately not the severity green, and the colour key says so.
+  - **How old each fix is.** The feed stamps its own clock and how stale every
+    position is, which was being thrown away. A popup now says the position's age,
+    the time it was broadcast, and how far the aircraft could have travelled since
+    — at 900 km/h a single second is 250 metres, so a dot is not where the
+    aeroplane is, it is where it was. Recorded fixes keep the age they had when
+    captured, so a replay does not present a second-old position as the instant it
+    was drawn.
   - **Where a flight is going.** ADS-B carries a callsign, not a route, so the
     origin and destination come from adsbdb (free, no key) and the airframe falls
     back to hexdb when adsbdb has never heard of it. From those the tool works out

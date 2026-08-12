@@ -584,6 +584,7 @@
       + `${fix.alt !== null && fix.alt !== undefined ? `<br>${(fix.alt / 1000).toFixed(fix.alt > 10000 ? 0 : 1)} km up` : ''}`
       + `${fix.spd ? ` · ${Math.round(fix.spd * 3.6)} km/h` : ''}`
       + `${fix.rng ? `<br>${km(fix.rng)} from you, ${Mx.compass(fix.az)} at ${Math.round(fix.el)}°` : ''}`
+      + `${Number.isFinite(fix.age) ? `<br><small>position was ${fix.age.toFixed(1)} s old when recorded</small>` : ''}`
       + `${item && item.routeLine ? `<br>${item.routeLine}` : ''}`
       + `<br><small>${track.points.length} fixes · hover the line to read any moment</small>`;
   }
@@ -696,6 +697,9 @@
         t: now, lat: item.lat, lng: item.lng,
         alt: Number.isFinite(item.altitude) ? Math.round(item.altitude) : null,
         spd: Number.isFinite(item.speed) ? Math.round(item.speed) : null,
+        // What the source itself said about this fix, kept so a replay does not
+        // present a second-old position as if it were the instant we drew it.
+        age: Number.isFinite(item.positionAge) ? item.positionAge : null,
         az: view ? Math.round(view.azimuth) : null,
         el: view ? Math.round(view.elevation * 10) / 10 : null,
         rng: view ? Math.round(view.range) : null,

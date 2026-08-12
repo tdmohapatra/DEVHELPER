@@ -114,8 +114,9 @@ const ISS_TLE = [
 const fixtures: Record<string, any> = {
   celestrak: ISS_TLE,
   aircraft: {
+    now: 1786532847002,
     ac: [
-      { hex: "abc123", flight: "AI101  ", lat: 12.99, lon: 77.61, alt_baro: 4000, gs: 250, track: 90, t: "A320", baro_rate: 500, squawk: "1234" },
+      { hex: "abc123", flight: "AI101  ", lat: 12.99, lon: 77.61, alt_baro: 4000, gs: 250, track: 90, t: "A320", baro_rate: 500, squawk: "1234", seen: 0.3, seen_pos: 1.2 },
       { hex: "def456", flight: "6E202", lat: 13.4, lon: 77.9, alt_baro: "ground", gs: 5, track: 10, t: "B738" },
       { hex: "bad", flight: "NOPOS", lat: null, lon: null },
     ],
@@ -1230,7 +1231,10 @@ describe("clicking an object to track it", () => {
     await load("aircraft");
     const marker = stateOf("aircraft").markers.get("abc123");
     expect(() => marker.openPopup()).not.toThrow();
-    expect(marker._popupContent).not.toContain("from");
+    // No distance line, since there is nowhere to measure from.
+    expect(marker._popupContent).not.toContain("from GPS");
+    expect(marker._popupContent).not.toContain("from your location");
+    expect(marker._popupContent).not.toContain("from Bengaluru");
     await live().setLayer("aircraft", false);
   });
 
@@ -1395,6 +1399,50 @@ describe("direction shown on the track line", () => {
     expect(track.trail._map).toBeNull();
     expect(track.glow._map).toBeNull();
     expect(track.flow._map).toBeNull();
+    await live().setLayer("aircraft", false);
+  });
+});
+
+describe("how old a fix is", () => {
+  it("carries the feed's own clock rather than assuming every fix is now", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    expect(plane.positionAge).toBe(1.2);
+    expect(plane.signalAge).toBe(0.3);
+    // 1786532847002 is the feed's `now`; the position is 1.2 s older than that.
+    expect(plane.fixAt).toBe(1786532847002 - 1200);
+    await live().setLayer("aircraft", false);
+  });
+
+  it("says how far it could have moved since that position was broadcast", async () => {
+    const st = await load("aircraft");
+    const plane = st.items[0];
+    // 250 knots for 1.2 s is about 154 m — worth knowing before trusting the dot.
+    expect(plane.staleBy).toBeCloseTo(1.2 * 250 * 0.514444, 1);
+    expect(plane.detail).toContain("1.2 s old");
+    expect(plane.detail).toContain("broadcast");
+    expect(plane.detail).toContain("on from there");
+    await live().setLayer("aircraft", false);
+  });
+
+  it("keeps that age on the recorded fix, and shows it on hover", async () => {
+    live().setHome({ lat: 12.9716, lng: 77.5946 }, "Bengaluru");
+    const st = await load("aircraft");
+    const track = live().startTracking("aircraft", st.items[0].id);
+    expect(track.points[0].age).toBe(1.2);
+    expect(live().hoverInfo(track, null)).toContain("1.2 s old when recorded");
+    live().stopTracking();
+    await live().setLayer("aircraft", false);
+  });
+
+  it("falls back to our own clock when the feed omits its own", async () => {
+    const complete = fixtures.aircraft;
+    fixtures.aircraft = { ac: [{ ...complete.ac[0], seen_pos: undefined, seen: undefined }] };
+    const st = await load("aircraft");
+    expect(st.items[0].positionAge).toBeNull();
+    expect(st.items[0].fixAt).toBeGreaterThan(Date.now() - 5000);
+    expect(st.items[0].staleBy).toBeNull();
+    fixtures.aircraft = complete;
     await live().setLayer("aircraft", false);
   });
 });
