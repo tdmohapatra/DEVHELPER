@@ -208,11 +208,16 @@
 
   /* =============================== aircraft =============================== */
 
+  // Deliberately not the severity green: this is an identity, and it has to be
+  // impossible to mistake for a reading. Documented in the colour key.
+  const MIL_COLOR = '#00e676';
+
   live.register({
     id: 'aircraft',
     label: 'Aircraft',
     emoji: '✈️',
-    hint: 'airplanes.live ADS-B feed, around the middle of the view',
+    hint: 'airplanes.live ADS-B feed, around the middle of the view. '
+      + 'Military and Indian state aircraft are marked in green, with a trail.',
     attribution: '<a href="https://airplanes.live">airplanes.live</a>',
     every: 20,
     needsBounds: true,
@@ -245,6 +250,19 @@
           speed,
           heading: Number.isFinite(a.track) ? a.track : null,
           glyph: '✈️',
+          ...(() => {
+            const mil = classifyAircraft(a);
+            if (!mil) return {};
+            return {
+              military: mil,
+              registration: a.r || null,
+              // Its own mark, its own colour, its own trail: a state aircraft
+              // should be findable at a glance among forty airliners.
+              iconHtml: PLANE_SVG,
+              iconClass: 'smx-mil',
+              iconSize: 26,
+            };
+          })(),
           // Route and airframe are already known for an aeroplane we have seen.
           ...(() => {
             const was = previous.get(a.hex);
@@ -253,7 +271,13 @@
                   airframe: was.airframe, aircraftLine: was.aircraftLine, extra: was.extra }
               : {};
           })(),
-          detail: X.kv([
+          detail: (() => {
+            const mil = classifyAircraft(a);
+            return mil
+              ? `<div class="smx-route"><span class="code" style="color:${MIL_COLOR}">${X.esc(mil.service)}</span></div>`
+                + `<div class="smx-meta">${X.esc(mil.why)}${a.r ? ` · ${X.esc(a.r)}` : ''}</div>`
+              : '';
+          })() + X.kv([
             ['type', X.esc(a.t || '—')],
             ['altitude', onGround ? 'on the ground' : altM !== null ? `${Math.round(altM).toLocaleString()} m` : null],
             ['speed', speed !== null ? `${Math.round(speed * 3.6)} km/h` : null],
@@ -266,6 +290,46 @@
       }).filter(Boolean);
       return { items, note: `${radiusNm} nm around the view centre` };
     },
+    /**
+     * A short trail behind every military or state aircraft, whether or not it is
+     * being tracked: the point of highlighting one is to see where it has been
+     * without having to click it first. Capped, and dropped as soon as the
+     * aircraft leaves the feed.
+     */
+    afterDraw(items, ctx) {
+      const st = ctx.state;
+      st.milTrails = st.milTrails || new Map();
+      if (!st.milGroup) st.milGroup = L.layerGroup([], { pane: live.rasterPane }).addTo(map);
+
+      const seen = new Set();
+      for (const item of items) {
+        if (!item.military) continue;
+        seen.add(item.id);
+        const points = st.milTrails.get(item.id) || [];
+        const last = points[points.length - 1];
+        if (!last || Mx.haversine(last, item) > 200) points.push({ lat: item.lat, lng: item.lng });
+        st.milTrails.set(item.id, points.slice(-80));
+      }
+      for (const id of [...st.milTrails.keys()]) if (!seen.has(id)) st.milTrails.delete(id);
+
+      st.milGroup.clearLayers();
+      for (const points of st.milTrails.values()) {
+        if (points.length < 2) continue;
+        const latlngs = points.map((p) => [p.lat, p.lng]);
+        L.polyline(latlngs, {
+          pane: live.rasterPane, className: 'smx-glow', color: MIL_COLOR,
+          weight: 9, opacity: 0.3, interactive: false,
+        }).addTo(st.milGroup);
+        L.polyline(latlngs, {
+          pane: live.rasterPane, color: MIL_COLOR, weight: 2, opacity: 0.9, interactive: false,
+        }).addTo(st.milGroup);
+        L.polyline(latlngs, {
+          pane: live.rasterPane, className: 'smx-flow smx-flow-2', color: '#c8ffe0',
+          weight: 1.5, opacity: 0.95, dashArray: '1 9', interactive: false,
+        }).addTo(st.milGroup);
+      }
+    },
+
     alert: {
       label: 'aircraft flies low near me',
       defaults: { maxKm: 25, maxAltM: 3000 },
@@ -281,6 +345,62 @@
       },
     },
   });
+
+  /* ------------------- military and state aircraft over India ------------------- */
+
+  /**
+   * Is this a military or state aircraft, and whose?
+   *
+   * Three independent signals, because none is sufficient alone:
+   *
+   *   · the feed's own military flag (dbFlags bit 1), which comes from a curated
+   *     database and is the strongest evidence there is;
+   *   · India's ICAO address block, 0x800000–0x83FFFF, which says the airframe is
+   *     Indian but nothing about who operates it;
+   *   · the registration, where Indian state aircraft follow patterns civil ones
+   *     do not — K and KW series for the Air Force, IN for the Navy, CG for the
+   *     Coast Guard.
+   *
+   * The verdict is a judgement from public patterns, not an official list, so the
+   * reason it matched travels with it and is shown in the popup.
+   */
+  const IAF_REG = /^(K|KW[- ]?)\d{3,4}$/i;          // K3010, KW-3456
+  const NAVY_REG = /^IN[- ]?\d{3,4}$/i;             // IN-201
+  const COASTGUARD_REG = /^CG[- ]?\d{3,4}$/i;       // CG-791
+  const STATE_CALLSIGN = /^(IAF|VYU|AVENGER|RAJDOOT|VUAV)/i;
+
+  function classifyAircraft(a) {
+    const flagged = ((a.dbFlags || 0) & 1) === 1;
+    const hex = String(a.hex || '').toLowerCase();
+    const indianHex = /^8[0-3][0-9a-f]{4}$/.test(hex);
+    const reg = String(a.r || '').trim();
+    const callsign = String(a.flight || '').trim();
+
+    let service = null;
+    if (IAF_REG.test(reg)) service = 'Indian Air Force';
+    else if (NAVY_REG.test(reg)) service = 'Indian Navy';
+    else if (COASTGUARD_REG.test(reg)) service = 'Indian Coast Guard';
+
+    const why = [];
+    if (flagged) why.push('listed as military');
+    if (service) why.push(`${service} registration ${reg}`);
+    else if (STATE_CALLSIGN.test(callsign)) why.push(`state callsign ${callsign}`);
+    if (indianHex) why.push('Indian ICAO address');
+
+    // Flagged military, or an unmistakable Indian state registration, or a state
+    // callsign on an Indian airframe. An Indian address alone proves nothing.
+    const military = flagged || !!service || (STATE_CALLSIGN.test(callsign) && indianHex);
+    if (!military) return null;
+    return {
+      service: service || (indianHex ? 'Indian military or state' : 'Military or state'),
+      indian: indianHex || !!service,
+      why: why.join(' · '),
+    };
+  }
+
+  /** A plane pointing where it is going, rather than an emoji that cannot. */
+  const PLANE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">'
+    + '<path d="M12 2l2 7 7 3v2l-7-1.2V19l3 2v1l-5-1.6L7 22v-1l3-2v-6.2L3 14v-2l7-3z"/></svg>';
 
   /* --------------------- aircraft route and airframe --------------------- */
 
@@ -337,7 +457,14 @@
         ]) : '');
   }
 
-  /** Second opinion on an airframe, when adsbdb has never heard of it. */
+  /**
+   * Second opinion on an airframe, when adsbdb has never heard of it.
+   *
+   * hexdb sends its CORS header on a hit but not on a miss, so an unknown hex
+   * logs a CORS complaint in the console that cannot be suppressed from here.
+   * It is caught and cached as a miss, so it happens once per airframe — the
+   * coverage it adds (Indian registrations especially) is worth the noise.
+   */
   async function hexdbAircraft(hex) {
     const key = `hexdb:${hex}`;
     const hit = adsbCache.get(key);

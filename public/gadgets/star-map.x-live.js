@@ -119,10 +119,16 @@
    */
   function liveIcon(layer, item, tracked) {
     const rot = Number.isFinite(item.heading) ? `transform:rotate(${item.heading}deg)` : '';
+    // A layer may draw its own mark — an aeroplane pointing where it is going
+    // reads better than an emoji, and a highlighted one has to look different.
+    const inner = item.iconHtml
+      ? `<span class="glyph" style="${rot}">${item.iconHtml}</span>`
+      : `<span class="glyph" style="${rot}">${item.glyph || layer.emoji}</span>`;
+    const size = item.iconSize || 22;
     return L.divIcon({
-      className: `smx-live-dot${tracked ? ' tracked' : ''}`,
-      iconSize: [22, 22], iconAnchor: [11, 11],
-      html: `<span class="glyph" style="${rot}">${item.glyph || layer.emoji}</span>`,
+      className: `smx-live-dot${item.iconClass ? ` ${item.iconClass}` : ''}${tracked ? ' tracked' : ''}`,
+      iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+      html: inner,
     });
   }
 
@@ -314,6 +320,9 @@
       } else {
         defaultDraw(st.items, ctx);
       }
+      // A layer can add whatever the markers cannot express — a trail behind the
+      // handful of objects it wants to single out, for instance.
+      if (typeof layer.afterDraw === 'function') layer.afterDraw(st.items, ctx);
       evaluateAlerts(id);
       for (const track of live.tracks.values()) {
         if (track.layerId === id) updateTrack(track);

@@ -6,7 +6,7 @@
  * scripts, so they run here under jsdom against a Leaflet stub with the app's
  * globals faked, and every network call is a fixture.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /* ------------------------------ Leaflet stub ------------------------------ */
 
@@ -1509,5 +1509,83 @@ describe("aircraft route and airframe", () => {
     expect($("#smxTracked")!.textContent).toContain("VT-RTJ");
     expect(live().hoverInfo(track, null)).toContain("BLR");
     await live().setLayer("aircraft", false);
+  });
+});
+
+describe("military and state aircraft", () => {
+  const byId = (st: any, id: string) => st.items.find((i: any) => i.id === id);
+
+  /** Its own fleet, so the counts in every other test stay as they were. */
+  const FLEET = () => ({
+    ac: [
+      // Flagged military by the feed, with an Air Force registration: the real
+      // K5013 B737 that prompted this.
+      { hex: "8002f7", flight: "VUAVB  ", r: "K5013", t: "B737", lat: 13.05, lon: 77.65,
+        alt_baro: 9000, gs: 300, track: 45, dbFlags: 1 },
+      // An Indian Navy registration the feed has not flagged.
+      { hex: "800aaa", flight: "INAS339", r: "IN-201", t: "P8I", lat: 13.1, lon: 77.7,
+        alt_baro: 6000, gs: 280, track: 90 },
+      // An airliner on an Indian address, which must not be mistaken for either.
+      { hex: "800bbb", flight: "AIC999", r: "VT-EXA", t: "A320", lat: 12.8, lon: 77.4,
+        alt_baro: 11000, gs: 400, track: 180 },
+    ],
+  });
+
+  let civilian: any;
+  beforeEach(() => { civilian = fixtures.aircraft; fixtures.aircraft = FLEET(); });
+  afterEach(async () => { fixtures.aircraft = civilian; await live().setLayer("aircraft", false); });
+
+  it("marks an aircraft the feed itself flags as military", async () => {
+    const st = await load("aircraft");
+    const iaf = byId(st, "8002f7");
+    expect(iaf.military).toBeTruthy();
+    expect(iaf.military.service).toBe("Indian Air Force");
+    expect(iaf.military.why).toContain("listed as military");
+    expect(iaf.military.why).toContain("K5013");
+  });
+
+  it("recognises an Indian Navy registration the feed has not flagged", async () => {
+    const st = await load("aircraft");
+    const navy = byId(st, "800aaa");
+    expect(navy.military.service).toBe("Indian Navy");
+    expect(navy.military.indian).toBe(true);
+  });
+
+  it("leaves airliners alone, Indian address or not", async () => {
+    const st = await load("aircraft");
+    expect(byId(st, "800bbb").military).toBeUndefined();     // VT-EXA, an A320
+  });
+
+  it("gives them their own green mark, larger and pointing where they fly", async () => {
+    const st = await load("aircraft");
+    const iaf = byId(st, "8002f7");
+    expect(iaf.iconClass).toBe("smx-mil");
+    expect(iaf.iconSize).toBe(26);
+    expect(iaf.iconHtml).toContain("<svg");                  // a plane, not an emoji
+    expect(iaf.detail).toContain("Indian Air Force");
+    expect(iaf.detail).toContain("#00e676");                 // not the severity green
+    expect(SMX().SEVERITY).not.toContain("#00e676");
+  });
+
+  it("draws a trail behind them without being asked to track", async () => {
+    const st = await load("aircraft");
+    expect(st.milGroup).toBeTruthy();
+    expect(st.milTrails.size).toBe(2);                       // the two state aircraft
+    expect(st.milTrails.has("800bbb")).toBe(false);
+
+    // A trail needs a second, different fix before there is a line to draw.
+    fixtures.aircraft.ac.find((a: any) => a.hex === "8002f7").lat = 13.3;
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => (stateOf("aircraft").milTrails.get("8002f7") || []).length > 1, { timeout: 5000 });
+    expect(stateOf("aircraft").milGroup.getLayers().length).toBeGreaterThan(0);
+    fixtures.aircraft.ac.find((a: any) => a.hex === "8002f7").lat = 13.05;
+  });
+
+  it("forgets a trail once the aircraft leaves the feed", async () => {
+    const st = await load("aircraft");
+    expect(st.milTrails.has("800aaa")).toBe(true);
+    fixtures.aircraft = { ac: FLEET().ac.filter((a: any) => a.hex !== "800aaa") };
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => !stateOf("aircraft").milTrails.has("800aaa"), { timeout: 5000 });
   });
 });

@@ -165,6 +165,17 @@ window.SMX = (function () {
   .smx-flow-3 { animation-duration: 5s; }
   .smx-flow-4 { animation-duration: 2.8s; animation-direction: reverse; }
 
+  /* A military or state aircraft: its own mark, glowing, unmistakable among airliners. */
+  .smx-live-dot.smx-mil .glyph { width:26px; height:26px; line-height:26px; }
+  .smx-live-dot.smx-mil svg { fill:#00e676; filter: drop-shadow(0 0 5px #00e676) drop-shadow(0 0 1px #000); }
+  .smx-live-dot.smx-mil::after { content:''; position:absolute; inset:-4px; border-radius:50%;
+                                 border:1.5px solid rgba(0,230,118,.75); animation: smx-mil 2.2s infinite; }
+  @keyframes smx-mil {
+    0%   { box-shadow:0 0 0 0 rgba(0,230,118,.55); opacity:1; }
+    70%  { box-shadow:0 0 0 10px rgba(0,230,118,0); opacity:.6; }
+    100% { box-shadow:0 0 0 0 rgba(0,230,118,0); opacity:1; }
+  }
+
   .smx-live-dot.replay .glyph { opacity:.85; filter: drop-shadow(0 0 5px #ec4899); }
   .smx-timemark span { display:block; font-size:9.5px; font-weight:700; text-align:center;
                        color:var(--text); background:var(--surface); border:1px solid var(--border);
@@ -357,6 +368,7 @@ window.SMX = (function () {
         `<span class="smx-chip"><span class="smx-sw" style="background:${modeColor(m, 0)}"></span>${MODE_LABELS[m]}</span>`).join('')}
       <span class="smx-chip"><span class="smx-sw" style="background:linear-gradient(90deg,${SEVERITY[0]},${SEVERITY[2]},${SEVERITY[3]});border-radius:3px"></span>severity</span>
       <span class="smx-chip"><span class="smx-sw" style="background:${ANNOTATION}"></span>your picks &amp; events</span>
+      <span class="smx-chip"><span class="smx-sw" style="background:#00e676"></span>military / state aircraft</span>
     </div>
     <div class="smx-hint">Cool blues, violets and cyans identify <b>who</b> is travelling — shaded apart when
       several share a mode, and the map's own calculated route is the same blue. The green-to-red ramp only ever

@@ -115,6 +115,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - **Saved history.** Every fix is stored with its timestamp and the look angles
     that were true then, survives closing the tool, and exports as GPX, CSV or
     JSON. Deleting a history is a separate, deliberate act.
+  - **Military and Indian state aircraft stand out**: a green glowing aeroplane
+    that points where it is flying, larger than the rest, with a trail behind it
+    whether or not it is being tracked. Identified from three independent signals —
+    the feed's own military flag, India's ICAO address block, and the registration
+    patterns Indian state aircraft follow (K and KW for the Air Force, IN for the
+    Navy, CG for the Coast Guard) — and the reason it matched is shown, because
+    this is a judgement from public patterns, not an official list. Its green is
+    deliberately not the severity green, and the colour key says so.
   - **Where a flight is going.** ADS-B carries a callsign, not a route, so the
     origin and destination come from adsbdb (free, no key) and the airframe falls
     back to hexdb when adsbdb has never heard of it. From those the tool works out
