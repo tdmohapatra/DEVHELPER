@@ -214,14 +214,77 @@
   // A bus route is a line on the ground, not a reading: identity family, one hue.
   const BUS_COLOR = '#60a5fa';
 
+  /**
+   * Where the aeroplanes come from, in the order they are asked.
+   *
+   * Not OpenSky: it answers with its own origin in Access-Control-Allow-Origin,
+   * so a browser blocks the response no matter what the app does.
+   *
+   * airplanes.live is first — it needs no bridge and its 403 for an unknown
+   * client still arrives as a readable error. On 2026-08-13 it began refusing
+   * every request from every address tried, which is why there is a second
+   * source. adsb.fi is the same tar1090 feed shape from a different set of
+   * receivers, but sends no CORS header at all, so it is only reachable through
+   * the desktop app's own fetch.
+   */
+  const AIRCRAFT_SOURCES = [
+    {
+      id: 'airplanes.live',
+      url: (lat, lng, nm) => `https://api.airplanes.live/v2/point/${lat}/${lng}/${nm}`,
+    },
+    {
+      id: 'adsb.fi',
+      url: (lat, lng, nm) => `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lng}/dist/${nm}/`,
+      host: true,
+    },
+  ];
+
+  // How long a working fallback is trusted before the preferred source is tried
+  // again. Short enough to come back on its own, long enough that a feed which is
+  // down costs one wasted request per ten minutes, not one per refresh.
+  const SOURCE_RECHECK_MS = 10 * 60 * 1000;
+
+  /** Feeds stamp `now` in milliseconds or in seconds, depending on the endpoint. */
+  const feedNow = (now) => (Number.isFinite(now) ? (now > 1e12 ? now : now * 1000) : Date.now());
+
+  /**
+   * Ask each source until one answers, and remember which did.
+   *
+   * Every failure is carried into the error, because "aircraft are missing" and
+   * "both feeds refused us" are different problems and the panel should say which.
+   */
+  async function loadAircraftFeed(ctx, lat, lng, nm) {
+    const st = ctx.state;
+    const fresh = st.sourceAt && Date.now() - st.sourceAt < SOURCE_RECHECK_MS;
+    const order = fresh && st.source
+      ? AIRCRAFT_SOURCES.filter((s) => s.id === st.source).concat(AIRCRAFT_SOURCES.filter((s) => s.id !== st.source))
+      : AIRCRAFT_SOURCES;
+
+    const failures = [];
+    for (const source of order) {
+      try {
+        const data = await ctx.json(source.url(lat, lng, nm), { timeout: 25000, host: source.host });
+        // Only stamp on a change, or the preferred source would never be re-tried.
+        if (st.source !== source.id) { st.source = source.id; st.sourceAt = Date.now(); }
+        return { data, source };
+      } catch (e) {
+        failures.push(`${source.id}: ${(e && e.message) || e}`);
+      }
+    }
+    st.source = null;
+    st.sourceAt = 0;
+    throw new Error(failures.join(' · '));
+  }
+
   live.register({
     id: 'aircraft',
     label: 'Aircraft',
     emoji: '✈️',
-    hint: 'airplanes.live ADS-B feed, around the middle of the view. Airliners, turboprops, '
-      + 'helicopters, gliders, drones and ground traffic each have their own silhouette; '
-      + 'military and Indian state aircraft are green, with a trail.',
-    attribution: '<a href="https://airplanes.live">airplanes.live</a>',
+    hint: 'Live ADS-B around the middle of the view, from airplanes.live or adsb.fi — '
+      + 'whichever is answering, named underneath. Airliners, turboprops, helicopters, '
+      + 'gliders, drones and ground traffic each have their own silhouette; military and '
+      + 'Indian state aircraft are green, with a trail.',
+    attribution: '<a href="https://airplanes.live">airplanes.live</a> / <a href="https://adsb.fi">adsb.fi</a>',
     every: 20,
     needsBounds: true,
     // Aircraft carry their own lights, so darkness and sunlight do not matter —
@@ -229,22 +292,22 @@
     visibility: { needsDarkness: false, needsSunlight: false, minElevation: 3, maxRange: 30000 },
     enrich: (item) => enrichAircraft(item),
     async load(ctx) {
-      // Not OpenSky: it answers with its own origin in Access-Control-Allow-Origin,
-      // so a browser blocks the response. airplanes.live sends `*` and takes a
-      // centre-and-radius query, capped at 250 nautical miles.
+      // Both sources take a centre and a radius, capped at 250 nautical miles.
       const c = map.getCenter();
       const b = map.getBounds();
       const spanNm = Mx.haversine(c, { lat: b.getNorth(), lng: c.lng }) / 1852;
       const radiusNm = Math.max(10, Math.min(250, Math.round(spanNm)));
-      const data = await ctx.json(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/${radiusNm}`,
-        { timeout: 25000 });
+      const { data, source } = await loadAircraftFeed(ctx, c.lat.toFixed(3), c.lng.toFixed(3), radiusNm);
       const FT = 0.3048;
       const previous = new Map((ctx.state.items || []).map((i) => [i.id, i]));
       // The feed stamps its own clock and how stale each position is. At 900 km/h
       // a second of age is 250 metres of error, so it is worth carrying rather
       // than pretending every fix is "now".
-      const serverNow = Number.isFinite(data.now) ? data.now : Date.now();
-      const items = (data.ac || []).map((a) => {
+      const serverNow = feedNow(data.now);
+      // One endpoint calls the list `ac`, the other `aircraft`; the records inside
+      // are the same tar1090 shape.
+      const feed = Array.isArray(data.ac) ? data.ac : Array.isArray(data.aircraft) ? data.aircraft : [];
+      const items = feed.map((a) => {
         if (!Number.isFinite(a.lat) || !Number.isFinite(a.lon)) return null;
         const onGround = a.alt_baro === 'ground';
         const altM = onGround ? 0 : Number.isFinite(a.alt_baro) ? a.alt_baro * FT : null;
@@ -254,6 +317,7 @@
           label: (a.flight || '').trim() || a.r || a.hex,
           lat: a.lat, lng: a.lon,
           altitude: altM,
+          onGround,
           speed,
           heading: Number.isFinite(a.track) ? a.track : null,
           glyph: '✈️',
@@ -313,7 +377,9 @@
             + `</div>` : ''),
         };
       }).filter(Boolean);
-      return { items, note: `${radiusNm} nm around the view centre` };
+      // Name the source: which receivers answered decides what is in the sky here,
+      // and a silent switch to the fallback would look like traffic appearing.
+      return { items, note: `${radiusNm} nm around the view centre · ${source.id}` };
     },
     /**
      * A short trail behind every military or state aircraft, whether or not it is
@@ -365,6 +431,11 @@
       test: (item, ctx) => {
         const d = kmToHome(item);
         if (d === null || d > ctx.settings.maxKm) return null;
+        // Traffic on the ground reports an altitude of zero, which is the lowest
+        // reading there is and never what this alert is about — an aeroplane
+        // taxiing at an airport inside the radius would otherwise fire it on
+        // every refresh.
+        if (item.onGround) return null;
         if (!Number.isFinite(item.altitude) || item.altitude > ctx.settings.maxAltM) return null;
         return `${Math.round(item.altitude)} m over, ${d.toFixed(1)} km away`;
       },

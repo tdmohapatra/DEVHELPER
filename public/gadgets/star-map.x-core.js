@@ -410,9 +410,40 @@ window.SMX = (function () {
     };
   };
 
-  /** fetch + JSON with a timeout, so a hung tile/API call cannot wedge the UI. */
+  /**
+   * The desktop app's own fetch, if this page is the gadget iframe inside it.
+   *
+   * Same origin, so the helper the host puts on its window can be read directly.
+   * Absent when the map is opened in its own window or served by a plain `npm run
+   * dev`, and the caller falls back to the browser's fetch.
+   */
+  function hostJson() {
+    try {
+      const host = window.parent && window.parent !== window ? window.parent : null;
+      return host && typeof host.__smxHostJson === 'function' ? host.__smxHostJson : null;
+    } catch (_) {
+      return null; // a cross-origin parent: not ours, so not a bridge
+    }
+  }
+
+  /**
+   * fetch + JSON with a timeout, so a hung tile/API call cannot wedge the UI.
+   *
+   * `host: true` asks for the call to go through the desktop app instead. Some
+   * feeds answer 200 with no Access-Control-Allow-Origin header, and a webview
+   * throws that response away rather than hand it back; fetched from the Rust
+   * side there is no origin to enforce. Only worth setting for a feed known to
+   * lack the header — everything else should stay in the browser, where it is
+   * visible in devtools.
+   */
   async function json(url, opts) {
     const o = opts || {};
+    if (o.host) {
+      const via = hostJson();
+      // If the bridge is there, its failure is the answer: falling back to the
+      // browser would only reproduce the CORS error that `host` exists to avoid.
+      if (via) return await via(url, { timeout: o.timeout || 15000, method: o.method || 'GET', body: o.body || null });
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), o.timeout || 15000);
     try {

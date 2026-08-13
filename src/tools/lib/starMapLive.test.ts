@@ -121,6 +121,15 @@ const fixtures: Record<string, any> = {
       { hex: "bad", flight: "NOPOS", lat: null, lon: null },
     ],
   },
+  // adsb.fi answers the same tar1090 records under a different container key, and
+  // stamps `now` in seconds rather than milliseconds.
+  aircraftFi: {
+    now: 1786532847,
+    aircraft: [
+      { hex: "fi0001", flight: "AIC7DK ", lat: 12.99, lon: 77.61, alt_baro: 4000, gs: 250, track: 90, t: "A320", seen: 0.4, seen_pos: 0.9 },
+      { hex: "fi0002", flight: "TAXIING", lat: 12.98, lon: 77.60, alt_baro: "ground", gs: 12, track: 180, t: "B738" },
+    ],
+  },
   quakes: {
     features: [
       { id: "q1", geometry: { coordinates: [77.7, 13.05, 12] }, properties: { mag: 5.2, place: "near here", time: Date.now(), tsunami: 0 } },
@@ -232,11 +241,18 @@ const fixtures: Record<string, any> = {
   },
 };
 
+/** Hosts that should refuse this test, the way airplanes.live began refusing everyone. */
+const feedDown = new Set<string>();
+
 const fetchMock = vi.fn(async (url: string, init?: any) => {
   const u = String(url);
+  if ([...feedDown].some((host) => u.includes(host))) {
+    return { ok: false, status: 403, json: async () => ({}), text: async () => "" } as any;
+  }
   const text = u.includes("celestrak.org");
   const body = text ? fixtures.celestrak
     : u.includes("airplanes.live") ? fixtures.aircraft
+    : u.includes("opendata.adsb.fi") ? fixtures.aircraftFi
     : u.includes("earthquake.usgs.gov") ? fixtures.quakes
     : u.includes("rainviewer") ? fixtures.radar
     : u.includes("api.weather.gov") ? fixtures.nws
@@ -563,6 +579,25 @@ describe("alerts", () => {
     live().evaluateAlerts("aircraft");
     expect(live().state.alerts).toHaveLength(0);                // outside the radius
     await live().setLayer("aircraft", false);
+  });
+
+  /**
+   * Traffic on the ground reports zero altitude, the lowest reading there is. An
+   * airport inside the radius would otherwise fire "flies low near me" for every
+   * aeroplane taxiing on it, on every refresh.
+   */
+  it("ignores traffic on the ground, however close and however low", async () => {
+    feedDown.add("api.airplanes.live");                          // the fallback has a taxiing aircraft
+    try {
+      const st = await armed("aircraft", { maxKm: 50, maxAltM: 4000 });
+      expect(st.items.find((i: any) => i.id === "fi0002").onGround).toBe(true);
+      live().evaluateAlerts("aircraft");
+      expect(live().state.alerts.map((a: any) => a.label)).toEqual(["AIC7DK"]);
+    } finally {
+      feedDown.clear();
+      Object.assign(stateOf("aircraft"), { source: null, sourceAt: 0 });
+      await live().setLayer("aircraft", false);
+    }
   });
 
   it("fires for a quake over the magnitude floor and ignores the distant one", async () => {
@@ -1549,6 +1584,140 @@ describe("how old a fix is", () => {
     expect(st.items[0].staleBy).toBeNull();
     fixtures.aircraft = complete;
     await live().setLayer("aircraft", false);
+  });
+});
+
+/**
+ * One ADS-B feed is one point of failure: airplanes.live started answering 403 to
+ * every request, from every address, on 2026-08-13. These cover the second source
+ * and the cost of asking for it.
+ */
+describe("a second aircraft feed", () => {
+  const reset = () => {
+    feedDown.clear();
+    const st = stateOf("aircraft");
+    st.source = null;
+    st.sourceAt = 0;
+  };
+  beforeEach(reset);
+  afterEach(async () => {
+    reset();
+    await live().setLayer("aircraft", false);
+  });
+
+  const refresh = async () => {
+    await live().refresh("aircraft");
+    await vi.waitUntil(() => !stateOf("aircraft").busy, { timeout: 8000 });
+    return stateOf("aircraft");
+  };
+  // A delta rather than mockClear(): later tests read the accumulated call log,
+  // and clearing it here would quietly break them.
+  const urlsSince = () => {
+    const from = fetchMock.mock.calls.length;
+    return () => fetchMock.mock.calls.slice(from).map((c) => String(c[0]));
+  };
+
+  it("prefers airplanes.live and names it, so a silent switch cannot look like new traffic", async () => {
+    const st = await load("aircraft");
+    expect(st.error).toBeNull();
+    expect(st.note).toContain("airplanes.live");
+  });
+
+  it("falls back when the primary refuses, and reads the other container key", async () => {
+    feedDown.add("api.airplanes.live");
+    const st = await load("aircraft");
+    expect(st.error).toBeNull();
+    expect(st.note).toContain("adsb.fi");
+    expect(st.items.map((i: any) => i.label)).toContain("AIC7DK");
+  });
+
+  it("reads a clock stamped in seconds without landing the fix in 1970", async () => {
+    feedDown.add("api.airplanes.live");
+    const st = await load("aircraft");
+    const plane = st.items.find((i: any) => i.id === "fi0001");
+    // 1786532847 seconds, minus the 0.9 s the position had already aged.
+    expect(plane.fixAt).toBe(1786532847000 - 900);
+    expect(plane.positionAge).toBe(0.9);
+  });
+
+  it("sticks to the fallback instead of paying for the dead feed every refresh", async () => {
+    feedDown.add("api.airplanes.live");
+    await load("aircraft");
+    const asked = urlsSince();
+    await refresh();
+    expect(asked().some((u) => u.includes("opendata.adsb.fi"))).toBe(true);
+    expect(asked().some((u) => u.includes("api.airplanes.live"))).toBe(false);
+  });
+
+  it("tries the preferred source again once the fallback has been trusted long enough", async () => {
+    feedDown.add("api.airplanes.live");
+    expect((await load("aircraft")).note).toContain("adsb.fi");
+
+    feedDown.clear();
+    stateOf("aircraft").sourceAt = Date.now() - 11 * 60 * 1000;
+    expect((await refresh()).note).toContain("airplanes.live");
+  });
+
+  it("names both when neither answers, because that is a different problem", async () => {
+    feedDown.add("api.airplanes.live");
+    feedDown.add("opendata.adsb.fi");
+    const st = await load("aircraft");
+    expect(st.error).toContain("airplanes.live");
+    expect(st.error).toContain("adsb.fi");
+    expect(st.error).toContain("403");
+  });
+});
+
+/**
+ * adsb.fi answers 200 with no Access-Control-Allow-Origin header, which a webview
+ * discards. The desktop app fetches it instead; the map still has to work without
+ * that host — in its own window, or under a plain `npm run dev`.
+ */
+describe("borrowing the app's fetch", () => {
+  const bridged = (fn: unknown) => {
+    Object.defineProperty(window, "parent", { value: { __smxHostJson: fn }, configurable: true });
+    return () => Object.defineProperty(window, "parent", { value: window, configurable: true });
+  };
+  // Counted as a delta: later tests read the accumulated log, so it must not be cleared.
+  const fetchesSince = () => {
+    const from = fetchMock.mock.calls.length;
+    return () => fetchMock.mock.calls.length - from;
+  };
+
+  it("goes through the host when one is there, and not otherwise", async () => {
+    const viaHost = vi.fn(async () => ({ ac: [] }));
+    const restore = bridged(viaHost);
+    try {
+      const fetched = fetchesSince();
+      await SMX().json("https://opendata.adsb.fi/api/v2/mil", { host: true });
+      expect(viaHost).toHaveBeenCalledTimes(1);
+      expect(fetched()).toBe(0);
+
+      // Without the flag the call stays in the browser, where devtools can see it.
+      await SMX().json("https://api.airplanes.live/v2/mil");
+      expect(viaHost).toHaveBeenCalledTimes(1);
+      expect(fetched()).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("falls back to its own fetch when there is no host to borrow from", async () => {
+    const fetched = fetchesSince();
+    const data = await SMX().json("https://api.airplanes.live/v2/point/1/1/10", { host: true });
+    expect(fetched()).toBe(1);
+    expect(data.ac).toBeTruthy();
+  });
+
+  it("lets the host's failure stand, rather than retrying into the CORS error it avoids", async () => {
+    const restore = bridged(async () => { throw new Error("HTTP 403"); });
+    try {
+      const fetched = fetchesSince();
+      await expect(SMX().json("https://opendata.adsb.fi/api/v2/mil", { host: true })).rejects.toThrow("403");
+      expect(fetched()).toBe(0);
+    } finally {
+      restore();
+    }
   });
 });
 

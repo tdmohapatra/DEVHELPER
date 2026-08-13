@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { fetch as hostFetch } from "@tauri-apps/plugin-http";
 import { ExternalLink, RotateCw } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -22,11 +23,35 @@ import { Button } from "@/components/ui/button";
  */
 const SRC = "/gadgets/star-map.html";
 
+type HostJson = (url: string, opts?: { timeout?: number }) => Promise<unknown>;
+
 export function StarMap() {
   const frame = useRef<HTMLIFrameElement>(null);
   // Bumping the key remounts the iframe, which is the only reliable reload:
   // frame.contentWindow.location.reload() is blocked once the page has navigated.
   const [nonce, setNonce] = useState(0);
+
+  /**
+   * A fetch the iframe can borrow.
+   *
+   * The gadget is same-origin, so it reads this straight off window.parent. It
+   * asks for it only for feeds that answer without an Access-Control-Allow-Origin
+   * header — the webview discards those, while the Rust side has no origin to
+   * enforce. Not installed outside the desktop app (`npm run dev` in a browser),
+   * where the gadget falls back to its own fetch.
+   */
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const w = window as unknown as { __smxHostJson?: HostJson };
+    w.__smxHostJson = async (url, opts) => {
+      const res = await hostFetch(url, { method: "GET", connectTimeout: opts?.timeout ?? 15000 });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    };
+    return () => {
+      delete w.__smxHostJson;
+    };
+  }, []);
 
   return (
     <ToolShell
