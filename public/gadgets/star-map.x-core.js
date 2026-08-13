@@ -102,6 +102,59 @@ window.SMX = (function () {
   @keyframes smx-spin { to { transform: rotate(360deg); } }
   .smx-spin { animation: smx-spin 1s linear infinite; transform-origin: 50% 50%; }
 
+  /* ---- the Space tab's 3D overlay ----
+     It covers the map rather than living inside the panel: a solar system in a
+     280px column is unreadable, and the panel stays usable on top of it. */
+  .smx-space { position:fixed; inset:0; z-index:8000; background:#05070d; }
+  .smx-space-canvas { position:absolute; inset:0; }
+  .smx-space-canvas canvas { display:block; }
+  .smx-space-hud { position:absolute; left:14px; top:14px; max-width:min(520px, 52vw);
+                   background:rgba(10,14,22,.72); border:1px solid var(--border);
+                   border-radius:10px; padding:10px 12px; backdrop-filter: blur(6px);
+                   pointer-events:none; }
+  .smx-space-hud b { font-size:15px; }
+  .smx-space-row { display:flex; flex-direction:column; gap:2px; }
+  .smx-space-close { position:absolute; right:14px; top:14px; width:32px; height:32px;
+                     border-radius:8px; background:rgba(10,14,22,.72); color:var(--text);
+                     border:1px solid var(--border); cursor:pointer; font-size:15px; }
+  .smx-space-close:hover { border-color: var(--blue); }
+  .smx-space-fail { position:absolute; inset:0; display:grid; place-items:center;
+                    color:var(--text-dim); padding:24px; text-align:center; }
+  .smx .smx-btn.smx-primary { background:var(--accent); color:var(--accent-text); border-color:transparent; }
+
+  /* the checkboxes, both on the view and in the panel */
+  .smx-space-layers { position:absolute; right:14px; top:56px; display:flex; flex-direction:column;
+                      gap:3px; background:rgba(10,14,22,.72); border:1px solid var(--border);
+                      border-radius:10px; padding:9px 11px; backdrop-filter: blur(6px); }
+  .smx-space-layer, .smx-check { display:flex; align-items:center; gap:6px; font-size:12px;
+                                 color:var(--text); cursor:pointer; user-select:none; }
+  .smx-check { padding:2px 0; }
+  .smx-space-layer input, .smx-check input { accent-color: var(--blue); cursor:pointer; margin:0; }
+
+  /* the event console: small, out of the way, and never covering the middle */
+  .smx-space-console { position:absolute; left:14px; bottom:14px; width:min(420px, 44vw);
+                       max-height:34vh; overflow:auto; background:rgba(10,14,22,.78);
+                       border:1px solid var(--border); border-radius:10px; padding:8px 10px;
+                       backdrop-filter: blur(6px); font-size:12px; }
+  .smx-space-console-head { font-weight:600; margin-bottom:4px; }
+  .smx-space-event { padding:2px 0; border-left:2px solid transparent; padding-left:6px; }
+  .smx-space-event.smx-ev-near { border-left-color:#00e676; }
+  .smx-space-event.smx-ev-approach { border-left-color:#ff5470; }
+  .smx-space-event.smx-ev-moon { border-left-color:#cfd4da; }
+  .smx-space-event.smx-ev-follow, .smx-space-event.smx-ev-data { border-left-color:var(--blue); }
+
+  /* the geometry readout for whatever is selected */
+  .smx-space-geometry { margin-top:6px; padding-top:6px; border-top:1px solid var(--border);
+                        font-size:12px; line-height:1.5; max-height:42vh; overflow:auto; }
+  .smx-geo-row { display:flex; gap:10px; align-items:baseline; padding:1px 0; }
+  .smx-geo-row > span { flex:0 0 92px; text-align:right; color:var(--text-dim); }
+  .smx-geo-row > b { flex:1 1 auto; font-weight:500; min-width:0; }
+
+  /* the hover readout */
+  .smx-space-tip { position:absolute; pointer-events:none; background:rgba(10,14,22,.92);
+                   border:1px solid var(--border); border-radius:8px; padding:6px 9px;
+                   font-size:12px; line-height:1.45; max-width:260px; z-index:2; }
+
   /* ---- drag / mark mode pill (lives in the app's own HUD) ---- */
   .smx-mode { cursor:pointer; user-select:none; }
   .smx-mode .smx-mode-dot { width:8px; height:8px; border-radius:50%; background:var(--text-dim);

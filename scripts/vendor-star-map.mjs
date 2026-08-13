@@ -39,10 +39,13 @@ const GENERATED = ["star-map.leaflet.js", "star-map.app.js"];
 // toast…), which only exist once star-map.app.js has run.
 const ADDONS = [
   "star-map.x-math.js",
+  "star-map.x-orbits.js",    // orbital mechanics, for the Space tab
   "star-map.satellite.js",   // vendored satellite.js (MIT), for the satellites layer
   "star-map.x-core.js",
   "star-map.x-sim.js",
   "star-map.x-geo.js",
+  "star-map.x-space.js",     // the pixel solar-system renderer…
+  "star-map.x-cosmos.js",    // …and the Space tab that fills it
   "star-map.x-live.js",      // the live-layer framework…
   "star-map.x-layers.js",    // …and the layers that register into it
 ];
