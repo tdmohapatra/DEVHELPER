@@ -206,16 +206,48 @@
       { timeout: 20000 }));
   }
 
-  /** Heliocentric position of one spacecraft, AU, at a moment. */
-  async function fetchSpacecraft(command, date) {
-    const day = (date || new Date()).toISOString().slice(0, 10);
-    const next = new Date(+(date || new Date()) + 86400000).toISOString().slice(0, 10);
+  /**
+   * Every row of a Horizons vector table, with its Julian date.
+   *
+   * A spacecraft is not on a Kepler ellipse — its path is the result of thrust
+   * and gravity assists, known only as positions somebody integrated. So the
+   * whole table is kept and read back by interpolation, which is what lets a
+   * probe move with the simulated clock instead of sitting frozen at one fetched
+   * instant.
+   */
+  function parseHorizonsTable(result) {
+    const text = String(result || '');
+    const start = text.indexOf('$$SOE');
+    const end = text.indexOf('$$EOE');
+    if (start < 0 || end < 0) return [];
+    const block = text.slice(start, end);
+    const rows = [...block.matchAll(
+      /(\d+\.\d+)\s*=\s*A\.D\.[\s\S]*?X\s*=\s*(-?[\d.E+-]+)\s*Y\s*=\s*(-?[\d.E+-]+)\s*Z\s*=\s*(-?[\d.E+-]+)/g)];
+    return rows.map((m) => ({
+      jd: Number(m[1]),
+      position: { x: Number(m[2]), y: Number(m[3]), z: Number(m[4]) },
+    })).filter((r) => Number.isFinite(r.jd) && Number.isFinite(r.position.x));
+  }
+
+  /**
+   * A spacecraft's path over a span of time, not a single position.
+   *
+   * Six months either side of now at a two-day step: about 180 rows, one
+   * request, and enough to scrub the clock a year without asking again. Probes
+   * move in nearly straight lines at this scale, so two days between samples is
+   * far finer than the dot drawn for them.
+   */
+  async function fetchSpacecraft(command, date, spanDays) {
+    const centre = date || new Date();
+    const span = spanDays || 180;
+    const from = new Date(+centre - span * 86400000).toISOString().slice(0, 10);
+    const to = new Date(+centre + span * 86400000).toISOString().slice(0, 10);
     const data = await jpl(`${HORIZONS}?format=json&COMMAND=${encodeURIComponent(`'${command}'`)}`
-      + `&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='500@10'&START_TIME='${day}'`
-      + `&STOP_TIME='${next}'&STEP_SIZE='1d'&VEC_TABLE='1'&REF_PLANE='ECLIPTIC'&OUT_UNITS='AU-D'`, 30000);
-    const vector = parseHorizonsVector(data && data.result);
-    if (!vector) throw new Error('Horizons returned no vector for this object');
-    return vector;
+      + `&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'&CENTER='500@10'&START_TIME='${from}'`
+      + `&STOP_TIME='${to}'&STEP_SIZE='2d'&VEC_TABLE='1'&REF_PLANE='ECLIPTIC'&OUT_UNITS='AU-D'`, 40000);
+    const samples = parseHorizonsTable(data && data.result);
+    if (!samples.length) throw new Error('Horizons returned no vectors for this object');
+    return samples;
   }
 
   /**
@@ -385,12 +417,22 @@
       <div class="smx-space" id="smxSpace">
         <div class="smx-space-canvas"></div>
         <div class="smx-space-hud">
+          <div class="smx-live-badge" id="smxLiveBadge"></div>
           <div><b id="smxSpaceTitle">Solar system</b></div>
           <div class="smx-hint" id="smxSpaceSub"></div>
           <div class="smx-hint" id="smxSpaceClock2"></div>
           <div class="smx-space-geometry" id="smxGeometry" hidden></div>
         </div>
+        <div class="smx-space-views">
+          <button class="smx-btn" data-view="system">Whole system</button>
+          <button class="smx-btn" data-view="inner">Inner planets</button>
+          <button class="smx-btn" data-view="earth">Earth &amp; Moon</button>
+          <button class="smx-btn" data-view="top">Look down</button>
+          <button class="smx-btn" data-view="edge">Edge on</button>
+          <button class="smx-btn" id="smxExplain">What am I looking at?</button>
+        </div>
         <div class="smx-space-layers" id="smxSpaceLayers"></div>
+        <div class="smx-space-explain" id="smxExplainBox" hidden></div>
         <div class="smx-space-console">
           <div class="smx-space-console-head">Events <span class="smx-hint" id="smxEventCount"></span></div>
           <div id="smxEvents"></div>
@@ -407,6 +449,12 @@
     overlay.querySelector('#smxSpaceLayers').innerHTML = LAYERS.map((l) =>
       `<label class="smx-space-layer"><input type="checkbox" data-layer="${l.id}"${l.on ? ' checked' : ''}> ${X.esc(l.label)}</label>`).join('');
     X.on(overlay, '[data-layer]', 'change', (_e, box) => toggleLayer(box.dataset.layer, box.checked, box));
+    X.on(overlay, '[data-view]', 'click', (_e, btn) => setViewpoint(btn.dataset.view));
+    overlay.querySelector('#smxExplain').addEventListener('click', () => {
+      const box = overlay.querySelector('#smxExplainBox');
+      box.hidden = !box.hidden;
+      if (!box.hidden) box.innerHTML = explainerHtml();
+    });
 
     try {
       state.view = Sp.createView(overlay.querySelector('.smx-space-canvas'), {
@@ -521,6 +569,102 @@
     }
   }
 
+  /**
+   * The five viewpoints worth having a button for.
+   *
+   * Earth is the reason these exist: at the zoom that fits Neptune, Earth and its
+   * Moon are a quarter of a pixel apart and Earth itself sits three pixels from
+   * Venus. Nothing about the data is wrong there — the solar system really is
+   * mostly empty and mostly outer — but it cannot be read, so the view has to be
+   * able to go and look.
+   */
+  function setViewpoint(which) {
+    if (!state.view) return;
+    const v = state.view;
+    if (which === 'system') { v.follow(null); v.zoomTo(1); v.lookFrom(25, 62); }
+    else if (which === 'inner') { v.follow('sun'); v.zoomTo(state.scaleMode === 'true' ? 12 : 3.4); v.lookFrom(25, 70); }
+    else if (which === 'earth') {
+      // Following Earth and zooming until the Moon's 384,400 km is a visible gap.
+      v.follow('earth');
+      v.zoomTo(state.scaleMode === 'true' ? 320 : 300);
+      v.lookFrom(25, 55);
+      state.selected = 'earth';
+      v.select('earth');
+      drawTitle();
+    } else if (which === 'top') v.lookFrom(undefined, 90);
+    else if (which === 'edge') v.lookFrom(undefined, 3);
+    for (const btn of overlay.querySelectorAll('[data-view]')) {
+      btn.classList.toggle('on', btn.dataset.view === which && (which === 'system' || which === 'inner' || which === 'earth'));
+    }
+    v.redraw();
+  }
+
+  /**
+   * What the picture is, in plain terms, on the screen it describes.
+   *
+   * Written here rather than in a manual because the questions it answers are
+   * the ones that arise while looking at it: is that where Earth really is, why
+   * is Jupiter the same size as Saturn, and which of this was measured.
+   */
+  function explainerHtml() {
+    const belt = state.belt.loaded
+      ? `${state.belt.asteroids.length} of ${state.belt.total.toLocaleString()} known near-Earth asteroids`
+      : 'the asteroid population (not loaded — tick the box)';
+    return `
+      <h4>What is on the screen</h4>
+      <p><b>Every position is real.</b> The planets and the Moon are computed on this
+      machine from their orbital elements — no network, no lookup table. Checked against
+      JPL Horizons for one instant: Mercury, Venus and Earth land within about 3,000 km,
+      Mars within 48,000 km, the outer planets within about a tenth of a percent, and
+      433 Eros within 1,721 km. The Moon lands within 319 km.</p>
+
+      <p><b>No size is real.</b> Earth is 4.3 × 10⁻⁵ AU across; drawn to scale beside its own
+      orbit it would be a hundredth of a pixel. Every body here is a fixed handful of
+      pixels — a planet 5–12, a moon 4, a rock 2–4 — and that size says what kind of thing
+      it is, nothing more. Only the distances carry information.</p>
+
+      <h4>The two scales</h4>
+      <p><b>Fit on screen</b> compresses everything past 1 AU logarithmically so all eight
+      planets are visible at once. It destroys the ratios on purpose and no number is ever
+      read from it. <b>True distances</b> is the real thing, with a scale bar saying what a
+      pixel is worth — and at that scale the inner planets are a knot around the Sun,
+      which is what the solar system actually looks like.</p>
+
+      <h4>Where each thing comes from</h4>
+      <ul>
+        <li><b>Planets, the Moon, every distance and speed</b> — computed here, live.</li>
+        <li><b>Asteroids</b> — orbital elements from JPL's Small-Body Database (${X.esc(belt)}).
+        Their positions are then computed here too, which is why thousands of them cost
+        one request rather than one request each.</li>
+        <li><b>Close approaches and impact risk</b> — JPL's own tables, fetched.</li>
+        <li><b>Spacecraft</b> — a path fetched from JPL Horizons and read back by
+        interpolation. A probe under thrust is not on any ellipse, so its path can only
+        be a list of positions somebody integrated.</li>
+      </ul>
+
+      <h4>The simulation</h4>
+      <p>Press play and the clock runs at whatever speed the slider says — up to 120 days
+      per second. Everything on screen is recomputed for the new moment from the same
+      elements, so it is not an animation being replayed: it is the same arithmetic asked
+      about a different time. Scrub a year forward and the asteroid, the planet and the
+      event list all agree, because they are all answers to the same question.</p>
+
+      <p>The events console works the same way. A closest approach is not looked up — it is
+      the instant a distance stops shrinking, found by watching it. That is why it works
+      for any date and any object, including ones no almanac covers.</p>
+
+      <h4>Colours</h4>
+      <ul>
+        <li>Planets keep the colour they are actually seen as.</li>
+        <li><span style="color:${Sp.PALETTE.asteroid}">Orange</span> is an asteroid,
+        <span style="color:${Sp.PALETTE.approach}">red</span> one flagged potentially hazardous
+        or on a listed close approach, and
+        <span style="color:${Sp.PALETTE.spacecraft}">cyan</span> is something we launched.</li>
+        <li>A white box marks what is selected; its perihelion and aphelion are marked on
+        its orbit with the long axis drawn between them.</li>
+      </ul>`;
+  }
+
   /* ---------------------------- the tooltip --------------------------- */
 
   /**
@@ -572,7 +716,14 @@
     if (tracked && tracked.kind === 'body') return (t) => O.smallBodyAt(tracked.elements, t).position;
     const belt = elementsFor(id);
     if (belt) return (t) => O.smallBodyAt(belt, t).position;
-    // A spacecraft is one fetched vector, so it has no speed to measure.
+    // A spacecraft has a fetched path, which can be read at any moment inside it
+    // — so its speed is measured the same way as everything else.
+    if (tracked && tracked.samples) {
+      return (t) => {
+        const at = O.trajectoryAt(tracked.samples, t);
+        return at ? at.position : null;
+      };
+    }
     return null;
   }
 
@@ -627,8 +778,16 @@
     state.moon = moon;
 
     for (const [id, entry] of state.tracked) {
-      if (entry.kind === 'body') positions[id] = O.smallBodyAt(entry.elements, state.date).position;
-      else if (entry.vector) positions[id] = entry.vector;
+      if (entry.kind === 'body') {
+        positions[id] = O.smallBodyAt(entry.elements, state.date).position;
+      } else if (entry.samples) {
+        // Read off the fetched path at this instant, so a probe moves with the
+        // clock like everything else rather than sitting where it was fetched.
+        const at = O.trajectoryAt(entry.samples, state.date);
+        if (at) { positions[id] = at.position; entry.outsideSpan = at.outsideSpan; }
+      } else if (entry.vector) {
+        positions[id] = entry.vector;
+      }
     }
 
     // The whole population, moved to this instant. One Kepler solve each, which
@@ -638,6 +797,23 @@
     }
 
     state.positions = positions;
+
+    /* The Moon's path around Earth, rebuilt each tick.
+       It is drawn about where Earth is now rather than as the true spiral the
+       Moon traces through space, because the question it answers is "how far out
+       does the Moon go", and at this zoom the spiral would be a thick smear. A
+       month of samples, so it closes. */
+    const ring = [];
+    for (let k = 0; k <= 32; k++) {
+      const at = new Date(+state.date + (k / 32) * 27.32 * 86400000);
+      const m = O.moonGeocentric(at).position;
+      ring.push({ x: positions.earth.x + m.x, y: positions.earth.y + m.y, z: positions.earth.z + m.z });
+    }
+    state.view.setBody({
+      id: 'moon', layer: 'moon', label: 'Moon', colour: '#cfd4da', size: 4,
+      orbit: ring, orbitColour: '#7f8794', orbitOpacity: 0.5,
+    });
+
     state.view.setPositions(positions);
     if (rebuild) buildBodies();
     watchForEvents();
@@ -779,9 +955,82 @@
 
   const fmtDate = (d) => d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 
+  /**
+   * Is the clock showing now, or somewhere else?
+   *
+   * The single most confusing thing this tab could do is show a simulated moment
+   * that looks like the present. So the answer is always on screen: green and
+   * "live" when the clock is within a minute of real time, amber and "how far
+   * off" the instant it is not.
+   */
+  function liveState() {
+    const drift = state.date - Date.now();
+    const live = !state.playing && Math.abs(drift) < 60000;
+    const days = drift / 86400000;
+    return {
+      live,
+      drift,
+      text: live ? 'LIVE · positions for right now'
+        : `SIMULATED · ${Math.abs(days) < 1
+          ? `${Math.abs(drift / 3600000).toFixed(1)} hours` : `${Math.abs(days).toFixed(1)} days`}`
+          + ` ${days > 0 ? 'ahead of' : 'behind'} now`,
+    };
+  }
+
+  /** Put the clock back on the present and keep it there. */
+  function goLive() {
+    state.playing = false;
+    state.date = new Date();
+    tick(true);
+    drawClock();
+    drawTracked();
+    const play = root && root.querySelector('#smxPlay');
+    if (play) { play.textContent = 'Play'; play.classList.remove('on'); }
+  }
+
+  /**
+   * Where everything is at this moment, in a plain list.
+   *
+   * The 3D view answers "where is it"; this answers "how far is it", which is the
+   * question people actually arrive with. Ordered by distance from Earth rather
+   * than by distance from the Sun, because that is the ordering that changes.
+   */
+  function drawLivePositions() {
+    const box = root && root.querySelector('#smxLive');
+    if (!box || !state.positions.earth) return;
+    const earth = state.positions.earth;
+
+    const rows = O.PLANET_ORDER.filter((k) => k !== 'earth').map((key) => ({
+      id: key,
+      name: O.PLANETS[key].name,
+      km: O.separation(state.positions[key], earth).km,
+    }));
+    rows.push({ id: 'moon', name: 'The Moon', km: state.moon ? state.moon.km : null });
+    rows.push({ id: 'sun', name: 'The Sun', km: O.separation({ x: 0, y: 0, z: 0 }, earth).km });
+    for (const [id, entry] of state.tracked) {
+      const p = state.positions[id];
+      if (p) rows.push({ id, name: entry.name, km: O.separation(p, earth).km, followed: true });
+    }
+    rows.sort((a, b) => (a.km || Infinity) - (b.km || Infinity));
+
+    const live = liveState();
+    box.innerHTML = `<div class="smx-live-badge ${live.live ? 'on' : ''}">${X.esc(live.text)}</div>`
+      + rows.map((r) => `<div class="smx-live-row" data-look="${X.esc(r.id)}">
+          <span>${X.esc(r.name)}${r.followed ? ' ·' : ''}</span>
+          <b>${X.esc(r.km === null ? '—' : O.describeDistance(r.km))}</b>
+        </div>`).join('')
+      + '<div class="smx-hint">Distance from Earth, nearest first. Click one to look at it.</div>';
+  }
+
   function drawClock() {
     const out = root && root.querySelector('#smxSpaceClock');
     if (out) out.textContent = fmtDate(state.date);
+    const badge = overlay && overlay.querySelector('#smxLiveBadge');
+    if (badge) {
+      const live = liveState();
+      badge.textContent = live.text;
+      badge.classList.toggle('on', live.live);
+    }
   }
 
   /**
@@ -908,8 +1157,21 @@
       el.innerHTML = `
         <div class="smx-row">
           <button class="smx-btn smx-primary" id="smxOpenSpace">Open the explorer</button>
-          <span class="smx-hint" id="smxSpaceClock"></span>
+          <button class="smx-btn" id="smxGoLive">Back to now</button>
         </div>
+        <div class="smx-hint" id="smxSpaceClock"></div>
+
+        <h4>Right now</h4>
+        <div id="smxLive"></div>
+
+        <h4>Go and look</h4>
+        <div class="smx-row">
+          <button class="smx-btn" data-view="system">Whole system</button>
+          <button class="smx-btn" data-view="inner">Inner planets</button>
+          <button class="smx-btn" data-view="earth">Earth &amp; Moon</button>
+        </div>
+        <div class="smx-hint">Or drag the view to turn it, and use the wheel to zoom.
+          Hover anything for its distance and speed; click it for its full orbit.</div>
 
         <h4>Show</h4>
         <div id="smxLayerBoxes">${LAYERS.filter((l) => !l.loads).map((l) =>
@@ -987,8 +1249,29 @@
 
       drawClock();
       drawTracked();
+      drawLivePositions();
 
       el.querySelector('#smxOpenSpace').addEventListener('click', openView);
+      el.querySelector('#smxGoLive').addEventListener('click', goLive);
+      X.on(el, '[data-view]', 'click', (_e, btn) => { openView(); setViewpoint(btn.dataset.view); });
+      // Clicking a row in the "right now" list goes and looks at that thing.
+      X.on(el, '[data-look]', 'click', (_e, row) => {
+        openView();
+        state.selected = row.dataset.look;
+        if (state.view) { state.view.select(state.selected); state.view.follow(state.selected); }
+        drawTitle();
+      });
+
+      // The live list is only worth refreshing while it is the present; a
+      // simulated clock redraws it on every tick anyway.
+      setInterval(() => {
+        if (!state.playing && Math.abs(state.date - Date.now()) < 60000) {
+          state.date = new Date();
+          if (state.view) tick();
+          drawClock();
+          drawLivePositions();
+        }
+      }, 1000);
       el.querySelector('#smxNow').addEventListener('click', () => { state.date = new Date(); tick(true); drawClock(); });
       el.querySelector('#smxPlay').addEventListener('click', (e) => {
         state.playing = !state.playing;
@@ -1129,7 +1412,7 @@
           const out = [];
           for (const craft of SPACECRAFT) {
             try {
-              out.push(Object.assign({}, craft, { vector: await fetchSpacecraft(craft.command, state.date) }));
+              out.push(Object.assign({}, craft, { samples: await fetchSpacecraft(craft.command, state.date) }));
             } catch (e) {
               out.push(Object.assign({}, craft, { error: (e && e.message) || String(e) }));
             }
@@ -1140,14 +1423,19 @@
           state.lists.spacecraft = craft;
           return craft.map((c) => {
             if (c.error) return `<div class="smx-card"><b>${X.esc(c.name)}</b><div class="smx-hint">${X.esc(c.error)}</div></div>`;
-            const sun = O.separation(c.vector, { x: 0, y: 0, z: 0 });
+            const now = O.trajectoryAt(c.samples, state.date);
+            const sun = O.separation(now.position, { x: 0, y: 0, z: 0 });
+            const speed = speedKmS((t) => (O.trajectoryAt(c.samples, t) || {}).position, state.date, 720);
+            const span = O.trajectorySpan(c.samples);
             return `<div class="smx-card">
               <div class="smx-row" style="justify-content:space-between">
                 <b>${X.esc(c.name)}</b>
                 <button class="smx-btn" data-craft="${X.esc(c.id)}">Show</button>
               </div>
               <div class="smx-hint">${X.esc(O.describeDistance(sun.km))} from the Sun ·
-                ${X.esc(O.describeLightTime(sun.lightSeconds))} out</div></div>`;
+                ${X.esc(O.describeLightTime(sun.lightSeconds))} out${speed ? ` · ${speed.toFixed(1)} km/s` : ''}</div>
+              <div class="smx-hint">path known ${X.esc(span.from.toISOString().slice(0, 10))} to
+                ${X.esc(span.to.toISOString().slice(0, 10))}, ${span.samples} positions</div></div>`;
           }).join('');
         }));
 
@@ -1163,9 +1451,9 @@
 
       X.on(el, '[data-craft]', 'click', (_e, btn) => {
         const craft = state.lists.spacecraft.find((c) => c.id === btn.dataset.craft);
-        if (!craft || !craft.vector) return;
+        if (!craft || !craft.samples) return;
         openView();
-        track(craft.id, { kind: 'spacecraft', name: craft.name, vector: craft.vector });
+        track(craft.id, { kind: 'spacecraft', name: craft.name, samples: craft.samples });
       });
     },
   });
@@ -1173,7 +1461,8 @@
   // Exposed for the tests and for driving the tab from the console.
   window.SMXCosmos = {
     state, LAYERS, SPACECRAFT,
-    parseCloseApproaches, parseSentry, parseNeoFeed, parseHorizonsVector, parseJplDate,
+    parseCloseApproaches, parseSentry, parseNeoFeed, parseHorizonsVector, parseHorizonsTable, parseJplDate,
+    setViewpoint, explainerHtml,
     fetchCloseApproaches, fetchSentry, fetchSmallBody, fetchNeoFeed, fetchSpacecraft, fetchAsteroids,
     speedKmS, watchForEvents, logEvent, openView, track, untrack, tick, positionGetter,
     loadBelt, reloadBelt, toggleLayer, elementsFor, upcomingApproaches,

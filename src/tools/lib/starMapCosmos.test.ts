@@ -573,6 +573,72 @@ describe("the layer switches", () => {
   });
 });
 
+describe("a spacecraft's path", () => {
+  /**
+   * A real three-row Horizons vector table for Voyager 1, verbatim.
+   *
+   * Real numbers on purpose: an earlier version of this fixture had invented
+   * y and z values, which implied the probe was doing 3.6 km/s instead of its
+   * actual 17, and the speed test below would have been asserting nonsense.
+   */
+  const table = `*******************************************************************************
+$$SOE
+2461253.500000000 = A.D. 2026-Aug-01 00:00:00.0000 TDB
+ X =-3.209008776558914E+01 Y =-1.363450643049874E+02 Z = 9.864883763939235E+01
+2461263.500000000 = A.D. 2026-Aug-11 00:00:00.0000 TDB
+ X =-3.210204584618780E+01 Y =-1.364236767664065E+02 Z = 9.870562513426601E+01
+2461273.500000000 = A.D. 2026-Aug-21 00:00:00.0000 TDB
+ X =-3.211400331066488E+01 Y =-1.365022890918794E+02 Z = 9.876241205529482E+01
+$$EOE
+*******************************************************************************`;
+
+  it("keeps every row, not just the first", () => {
+    const samples = C.parseHorizonsTable(table);
+    expect(samples).toHaveLength(3);
+    expect(samples[0].jd).toBe(2461253.5);
+    expect(samples[2].jd).toBe(2461273.5);
+    expect(samples[1].position.x).toBeCloseTo(-32.1020458, 6);
+    expect(samples[1].position.z).toBeCloseTo(98.70562513426601, 9);
+  });
+
+  it("has nothing to say about an error report", () => {
+    expect(C.parseHorizonsTable("No matches found.")).toEqual([]);
+    expect(C.parseHorizonsTable(undefined)).toEqual([]);
+  });
+
+  /**
+   * The whole reason for the table: a probe used to be fetched as one position
+   * and sat frozen there while the clock ran. Now it is fetched as a path and
+   * moves with everything else.
+   */
+  it("asks for a span of time rather than a single instant", async () => {
+    json.mockResolvedValue({ result: table });
+    await C.fetchSpacecraft("-31", new Date("2026-08-13T00:00:00Z"), 180);
+    const url = json.mock.calls[0][0];
+    expect(url).toContain("START_TIME='2026-02-14'");
+    expect(url).toContain("STOP_TIME='2027-02-09'");
+    expect(url).toContain("STEP_SIZE='2d'");
+    expect(json.mock.calls[0][1].host).toBe(true);
+  });
+
+  it("returns the samples, and refuses an answer with none", async () => {
+    json.mockResolvedValue({ result: table });
+    expect(await C.fetchSpacecraft("-31", new Date())).toHaveLength(3);
+    json.mockResolvedValue({ result: "No matches found." });
+    await expect(C.fetchSpacecraft("-999", new Date())).rejects.toThrow(/no vectors/);
+  });
+
+  it("gives a probe a speed, which one frozen position never could", () => {
+    const O = (globalThis as any).SMXOrbits;
+    const samples = C.parseHorizonsTable(table);
+    const speed = C.speedKmS((t: Date) => (O.trajectoryAt(samples, t) || {}).position,
+      new Date("2026-08-11T00:00:00Z"), 720);
+    // Voyager 1 is doing about 17 km/s.
+    expect(speed).toBeGreaterThan(10);
+    expect(speed).toBeLessThan(25);
+  });
+});
+
 describe("the spacecraft list", () => {
   it("carries the Horizons ids the probes actually answer to", () => {
     const byId = Object.fromEntries(C.SPACECRAFT.map((c: any) => [c.id, c.command]));

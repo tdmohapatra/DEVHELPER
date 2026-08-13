@@ -331,7 +331,9 @@
     });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      state.zoom = Math.max(0.05, Math.min(60, state.zoom * (e.deltaY > 0 ? 0.88 : 1.14)));
+      // Up to 600× so Earth and its Moon can be told apart: they are 0.0026 AU
+      // apart, which is a quarter of a pixel at the whole-system zoom.
+      state.zoom = Math.max(0.05, Math.min(600, state.zoom * (e.deltaY > 0 ? 0.88 : 1.14)));
       draw();
     }, { passive: false });
     canvas.addEventListener('click', () => {
@@ -371,18 +373,36 @@
       return sprite;
     }
 
+    /**
+     * The camera, including what it is centred on.
+     *
+     * Following a body means the view is drawn about its position rather than
+     * about the Sun — which is the only way to look at Earth and its Moon, 0.0026
+     * AU apart, on a screen that also holds Neptune at 30 AU. It is done by
+     * shifting the projected picture, not by moving the body: nothing in the
+     * scene changes position, so every distance stays exactly what it was.
+     */
     function camera() {
       // The compressed scale tops out around 4.3 units at Neptune; true scale
       // needs the full 30. Either way the base zoom frames the whole thing.
       const span = state.scaleMode === 'compressed' ? 4.6 : 31;
       const half = Math.min(state.width, state.height) / 2;
-      return {
+      const cam = {
         centreX: state.width / 2,
         centreY: state.height / 2,
         pixelsPerUnit: (half / span) * state.zoom,
         yaw: state.yaw,
         pitch: state.pitch,
       };
+      if (state.follow) {
+        const target = state.follow === 'sun' ? { x: 0, y: 0, z: 0 } : state.positions[state.follow];
+        if (target) {
+          const p = project(scalePosition(intoFrame(target, state.frame, state.positions), state.scaleMode), cam);
+          cam.centreX += cam.centreX - p.x;
+          cam.centreY += cam.centreY - p.y;
+        }
+      }
+      return cam;
     }
 
     function draw() {
@@ -585,7 +605,10 @@
         if (pitch !== undefined) state.pitch = Math.max(2, Math.min(90, pitch));
         state.dirty = true;
       },
-      zoomTo(zoom) { state.zoom = Math.max(0.05, Math.min(60, zoom)); state.dirty = true; },
+      zoomTo(zoom) { state.zoom = Math.max(0.05, Math.min(600, zoom)); state.dirty = true; },
+      /** Keep the view centred on a body as it moves. Null goes back to the Sun. */
+      follow(id) { state.follow = id || null; state.dirty = true; },
+      following() { return state.follow || null; },
       redraw() { draw(); },
       dispose() {
         cancelAnimationFrame(raf);

@@ -143,6 +143,41 @@ window.SMX = (function () {
   .smx-space-event.smx-ev-moon { border-left-color:#cfd4da; }
   .smx-space-event.smx-ev-follow, .smx-space-event.smx-ev-data { border-left-color:var(--blue); }
 
+  /* live-or-simulated: the one thing that must never be ambiguous */
+  .smx-live-badge { display:inline-block; font-size:11px; font-weight:600; letter-spacing:.02em;
+                    border-radius:5px; padding:2px 7px; margin-bottom:4px;
+                    background:rgba(245,158,11,.16); color:#fbbf24; border:1px solid rgba(245,158,11,.35); }
+  .smx-live-badge.on { background:rgba(0,230,118,.14); color:#00e676; border-color:rgba(0,230,118,.35); }
+
+  /* the "right now" distance list in the panel */
+  .smx-live-row { display:flex; justify-content:space-between; gap:8px; align-items:baseline;
+                  padding:3px 6px; border-radius:6px; cursor:pointer; }
+  .smx-live-row:hover { background:var(--surface-2); }
+  .smx-live-row > span { color:var(--text-dim); }
+  .smx-live-row > b { font-weight:500; text-align:right; }
+
+  /* viewpoint buttons, along the top of the explorer */
+  .smx-space-views { position:absolute; left:50%; transform:translateX(-50%); top:14px;
+                     display:flex; gap:4px; flex-wrap:wrap; justify-content:center;
+                     background:rgba(10,14,22,.72); border:1px solid var(--border);
+                     border-radius:10px; padding:6px 8px; backdrop-filter: blur(6px); }
+  .smx-space-views .smx-btn { background:var(--surface-2); border:1px solid var(--border);
+                              color:var(--text); border-radius:7px; padding:4px 9px;
+                              font-size:12px; cursor:pointer; }
+  .smx-space-views .smx-btn:hover { border-color: var(--blue); }
+  .smx-space-views .smx-btn.on { background: var(--accent); color: var(--accent-text); border-color:transparent; }
+
+  /* the explainer, which covers the view on purpose while it is open */
+  .smx-space-explain { position:absolute; left:50%; transform:translateX(-50%); top:60px;
+                       width:min(720px, 82vw); max-height:72vh; overflow:auto;
+                       background:rgba(8,11,18,.94); border:1px solid var(--border);
+                       border-radius:12px; padding:14px 18px; font-size:13px; line-height:1.6; }
+  .smx-space-explain h4 { margin:14px 0 4px; font-size:13px; }
+  .smx-space-explain h4:first-child { margin-top:0; }
+  .smx-space-explain p { margin:0 0 8px; color:var(--text); }
+  .smx-space-explain ul { margin:0 0 8px; padding-left:18px; }
+  .smx-space-explain li { margin:2px 0; }
+
   /* the geometry readout for whatever is selected */
   .smx-space-geometry { margin-top:6px; padding-top:6px; border-top:1px solid var(--border);
                         font-size:12px; line-height:1.5; max-height:42vh; overflow:auto; }

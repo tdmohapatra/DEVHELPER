@@ -379,6 +379,82 @@ describe("the shape of an orbit", () => {
   });
 });
 
+describe("a spacecraft's fetched path", () => {
+  /**
+   * Three days of Voyager 1, straight from Horizons. A probe under thrust or
+   * flung past four planets is on no ellipse at all, so its path is only ever a
+   * list of positions somebody integrated — and reading it back is interpolation,
+   * not orbital mechanics.
+   */
+  const SAMPLES = [
+    { jd: 2461253.5, position: { x: -32.09008776558914, y: -136.3450643049874, z: 98.64883763939235 } },
+    { jd: 2461263.5, position: { x: -32.10204584618780, y: -136.4236767664065, z: 98.70562513426601 } },
+    { jd: 2461273.5, position: { x: -32.11400331066488, y: -136.5022890918794, z: 98.76241205529482 } },
+  ];
+  const at = (iso: string) => O.trajectoryAt(SAMPLES, new Date(iso));
+
+  it("lands exactly on a sample when the moment is one", () => {
+    // 2461263.5 is midnight UTC on the 11th of August 2026.
+    const got = at("2026-08-11T00:00:00Z");
+    expect(got.position.x).toBeCloseTo(-32.1020458461878, 12);
+    expect(got.position.z).toBeCloseTo(98.70562513426601, 12);
+    expect(got.outsideSpan).toBe(false);
+  });
+
+  it("interpolates between two samples", () => {
+    const half = at("2026-08-16T00:00:00Z");                 // midway between rows two and three
+    expect(half.position.x).toBeCloseTo((-32.1020458461878 + -32.1140033106649) / 2, 9);
+    expect(half.position.y).toBeCloseTo((-136.4236767664065 + -136.5022890918794) / 2, 9);
+    expect(half.at).toBe("between");
+  });
+
+  it("moves the probe as the clock moves, rather than freezing it", () => {
+    const early = at("2026-08-01T00:00:00Z").position;
+    const late = at("2026-08-11T00:00:00Z").position;
+    const km = Math.hypot(late.x - early.x, late.y - early.y, late.z - early.z) * O.AU_KM;
+    // Ten days at Voyager 1's real 17 km/s is about 14.7 million km, and this is
+    // real Horizons data, so the arithmetic has to come out there.
+    expect(km / (10 * 86400)).toBeCloseTo(17, 0);
+  });
+
+  /**
+   * Outside the fetched span it holds at the end and says so, rather than
+   * extrapolating a spacecraft into somewhere it has never been. A wrong dot
+   * with no warning is worse than a stale one that admits it.
+   */
+  it("holds at the end of what was fetched, and admits it", () => {
+    const after = at("2027-01-01T00:00:00Z");
+    expect(after.position).toEqual(SAMPLES[2].position);
+    expect(after.outsideSpan).toBe(true);
+    expect(after.at).toBe("end");
+
+    const before = at("2020-01-01T00:00:00Z");
+    expect(before.position).toEqual(SAMPLES[0].position);
+    expect(before.outsideSpan).toBe(true);
+  });
+
+  it("says nothing at all when there is no path", () => {
+    expect(O.trajectoryAt([], new Date())).toBeNull();
+    expect(O.trajectoryAt(null, new Date())).toBeNull();
+  });
+
+  it("reports the span it can answer for", () => {
+    const span = O.trajectorySpan(SAMPLES);
+    expect(span.samples).toBe(3);
+    expect(span.from.toISOString()).toBe("2026-08-01T00:00:00.000Z");
+    expect(span.to.toISOString()).toBe("2026-08-21T00:00:00.000Z");
+  });
+
+  it("finds the right pair in a long table", () => {
+    // The lookup is a binary search because this runs per probe per frame.
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      jd: 2461253.5 + i, position: { x: i, y: 0, z: 0 },
+    }));
+    const mid = O.trajectoryAt(many, new Date(Date.UTC(2026, 7, 1) + 199.5 * 86400000));
+    expect(mid.position.x).toBeCloseTo(199.5, 6);
+  });
+});
+
 describe("what is coming for Earth", () => {
   const FROM = new Date("2026-08-13T00:00:00Z");
 

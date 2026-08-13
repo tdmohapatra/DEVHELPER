@@ -523,6 +523,63 @@
     return (1329 / Math.sqrt(p)) * Math.pow(10, -0.2 * H);
   }
 
+  /* ---------------------------- trajectories ---------------------------- */
+
+  /**
+   * Where a spacecraft is, from a table of positions rather than an orbit.
+   *
+   * A probe under thrust, or one that has been flung past four planets, is not on
+   * a Kepler ellipse at all — its path is only known as a list of positions
+   * someone integrated. So it is fetched as a table and read back by
+   * interpolating between the two samples either side of the moment wanted.
+   *
+   * Straight-line interpolation is enough here and deliberately so: over a day,
+   * a probe's path curves by far less than the dot drawn for it, and pretending
+   * to a smoother curve would be inventing precision the table does not carry.
+   *
+   * Outside the span the table covers it returns the nearest end and says so,
+   * rather than extrapolating a spacecraft into somewhere it has never been.
+   */
+  function trajectoryAt(samples, date) {
+    if (!samples || !samples.length) return null;
+    const jd = julianDay(date);
+
+    if (jd <= samples[0].jd) {
+      return { position: samples[0].position, outsideSpan: jd < samples[0].jd, at: 'start' };
+    }
+    const last = samples[samples.length - 1];
+    if (jd >= last.jd) {
+      return { position: last.position, outsideSpan: jd > last.jd, at: 'end' };
+    }
+
+    // Binary search: these tables can be hundreds of rows and this is called for
+    // every probe on every frame.
+    let lo = 0, hi = samples.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (samples[mid].jd <= jd) lo = mid; else hi = mid;
+    }
+    const a = samples[lo], b = samples[hi];
+    const span = b.jd - a.jd;
+    const f = span === 0 ? 0 : (jd - a.jd) / span;
+    return {
+      position: {
+        x: a.position.x + (b.position.x - a.position.x) * f,
+        y: a.position.y + (b.position.y - a.position.y) * f,
+        z: a.position.z + (b.position.z - a.position.z) * f,
+      },
+      outsideSpan: false,
+      at: 'between',
+    };
+  }
+
+  /** The span a trajectory table covers, for saying what it can and cannot answer. */
+  function trajectorySpan(samples) {
+    if (!samples || !samples.length) return null;
+    const toDate = (jd) => new Date((jd - 2440587.5) * DAY_MS);
+    return { from: toDate(samples[0].jd), to: toDate(samples[samples.length - 1].jd), samples: samples.length };
+  }
+
   /* ------------------------------ forecast ------------------------------ */
 
   /**
@@ -630,6 +687,7 @@
     length, subtract, separation, rangeRate,
     elementsFromSbdb, elementsFromQueryRow, smallBodyAt, diameterFromMagnitude,
     orbitGeometry, orbitMarkers, nextPerihelion, forecast,
+    trajectoryAt, trajectorySpan,
     describeDistance, describeLightTime,
   };
 });
