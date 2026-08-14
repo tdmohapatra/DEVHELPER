@@ -21,6 +21,8 @@ import { PROGRAMMING_EXTRA, DSA_EXTRA, SYSTEM_DESIGN_EXTRA } from "./extraProgra
 import { HEALTHCARE_QUESTIONS } from "./healthcare";
 import { DEVICE_QUESTIONS } from "./devices";
 import { MICROSERVICE_QUESTIONS } from "./microservices";
+import { AZURE_SERVICE_QUESTIONS } from "./azureServices";
+import { DEVOPS_QUESTIONS } from "./devops";
 import type { Level, Question, TopicId } from "./types";
 
 export * from "./types";
@@ -48,6 +50,8 @@ export const BUILT_IN_QUESTIONS: Question[] = [
   ...HEALTHCARE_QUESTIONS,
   ...DEVICE_QUESTIONS,
   ...MICROSERVICE_QUESTIONS,
+  ...AZURE_SERVICE_QUESTIONS,
+  ...DEVOPS_QUESTIONS,
 ];
 
 export interface QuestionFilter {

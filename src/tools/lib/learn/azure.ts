@@ -64,6 +64,11 @@ var secrets = new SecretClient(new Uri("https://kv.vault.azure.net/"), credentia
 //    --role "Storage Blob Data Contributor" --scope <storage-resource-id>`,
     followUps: [
       {
+        question: "Why does a role assignment that looks right still refuse?",
+        answer:
+          "Two reasons, both common. Data-plane roles are separate from control-plane ones — Contributor on a storage account does *not* let you read a blob, you need Storage Blob Data Reader. And RBAC is eventually consistent, so a fresh assignment can take minutes and the first deployment after it fails confusingly.",
+      },
+      {
         question: "What if the app must run outside Azure too?",
         answer:
           "`DefaultAzureCredential` falls back through a chain — environment variables, workload identity, managed identity, CLI, Visual Studio. On-premises you can supply a client secret or certificate through the environment without changing code.",
