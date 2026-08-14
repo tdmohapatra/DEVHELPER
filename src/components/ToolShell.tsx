@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
-import { Star } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { GraduationCap, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Concepts, useConceptCount } from "@/components/Concepts";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/useAppStore";
 
@@ -20,6 +21,12 @@ export function ToolShell({ toolId, title, description, requiresNative, children
   const isFavorite = useAppStore((s) => s.favorites.includes(toolId));
   const toggleFavorite = useAppStore((s) => s.toggleFavorite);
 
+  // Every tool offers the theory behind it, when the catalogue has cards that
+  // name it. Closed by default — it is for the moment you want it, not a
+  // banner on a screen you use daily.
+  const conceptCount = useConceptCount(toolId);
+  const [showConcepts, setShowConcepts] = useState(false);
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-start justify-between gap-4 border-b border-border bg-background/70 px-6 py-4 backdrop-blur">
@@ -32,6 +39,18 @@ export function ToolShell({ toolId, title, description, requiresNative, children
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {actions}
+          {conceptCount > 0 && (
+            <Button
+              variant="ghost"
+              size="icon"
+              title={showConcepts ? "Hide the concepts behind this tool" : `${conceptCount} concept${conceptCount === 1 ? "" : "s"} behind this tool`}
+              aria-label="Concepts behind this tool"
+              aria-pressed={showConcepts}
+              onClick={() => setShowConcepts((v) => !v)}
+            >
+              <GraduationCap className={cn("transition-colors", showConcepts && "text-primary")} />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -44,7 +63,10 @@ export function ToolShell({ toolId, title, description, requiresNative, children
           </Button>
         </div>
       </header>
-      <div className="flex-1 overflow-auto p-6">{children}</div>
+      <div className="flex-1 overflow-auto p-6">
+        {showConcepts && <Concepts toolId={toolId} onClose={() => setShowConcepts(false)} />}
+        {children}
+      </div>
     </div>
   );
 }

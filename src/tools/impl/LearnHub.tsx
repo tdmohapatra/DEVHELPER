@@ -17,6 +17,9 @@ import {
   Trash2,
   Upload,
   MessageSquareQuote,
+  Map as MapIcon,
+  ArrowRight,
+  Wrench,
 } from "lucide-react";
 import { StarStories } from "@/tools/impl/StarStories";
 import { ToolShell } from "@/components/ToolShell";
@@ -29,6 +32,8 @@ import { Markdown } from "@/components/Markdown";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useLearnStore } from "@/stores/useLearnStore";
+import { useAppStore } from "@/stores/useAppStore";
+import { getTool } from "@/tools/registry";
 import {
   BUILT_IN_QUESTIONS,
   LEVELS,
@@ -44,6 +49,7 @@ import {
   type Question,
   type TopicId,
 } from "@/tools/lib/learn";
+import { SKILLS, TRACKS, bandLabel, nextSkill, type Band, type Skill } from "@/tools/lib/learn/roadmap";
 import {
   GRADES,
   dueCards,
@@ -55,7 +61,7 @@ import {
   type Grade,
 } from "@/tools/lib/learn/srs";
 
-type Mode = "browse" | "revise" | "sheet" | "stats" | "stories";
+type Mode = "browse" | "revise" | "sheet" | "stats" | "stories" | "roadmap";
 
 export function LearnHub() {
   const custom = useLearnStore((s) => s.custom);
@@ -193,6 +199,7 @@ export function LearnHub() {
               <ModeBtn active={mode === "revise"} onClick={() => { setMode("revise"); setReviseIndex(0); setRevealed(false); }} icon={<RotateCcw className="size-3.5" />} label="Revise" />
               <ModeBtn active={mode === "sheet"} onClick={() => setMode("sheet")} icon={<FileText className="size-3.5" />} label="Cheat sheet" />
               <ModeBtn active={mode === "stats"} onClick={() => setMode("stats")} icon={<BarChart3 className="size-3.5" />} label="Stats" />
+              <ModeBtn active={mode === "roadmap"} onClick={() => setMode("roadmap")} icon={<MapIcon className="size-3.5" />} label="Roadmap" />
               <ModeBtn active={mode === "stories"} onClick={() => setMode("stories")} icon={<MessageSquareQuote className="size-3.5" />} label="STAR stories" />
             </div>
 
@@ -230,7 +237,13 @@ export function LearnHub() {
             </div>
           </div>
 
-          {mode === "stories" ? (
+          {mode === "roadmap" ? (
+            <RoadmapView
+              questions={all}
+              progress={progress}
+              onStudy={(topic) => { setTopic(topic); setMode("revise"); setReviseIndex(0); setRevealed(false); }}
+            />
+          ) : mode === "stories" ? (
             <StarStories />
           ) : mode === "sheet" ? (
             <CheatSheet questions={filtered} />
@@ -447,7 +460,193 @@ function QuestionDetail({
           )}
         </section>
       )}
+
+      <PractiseIn tools={question.relatedTools} />
     </article>
+  );
+}
+
+/**
+ * The tools a card can be practised in.
+ *
+ * Reading that MLLP has no length prefix and watching a reader stall on a
+ * missing one are different acts, and the second is where the understanding
+ * is. The card knows which tool; this opens it.
+ */
+function PractiseIn({ tools }: { tools?: string[] }) {
+  const openTool = useAppStore((s) => s.openTool);
+  const available = (tools ?? []).map(getTool).filter((t): t is NonNullable<ReturnType<typeof getTool>> => !!t);
+  if (!available.length) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Practise in</span>
+      {available.map((tool) => (
+        <Button key={tool.id} size="sm" variant="outline" className="h-6 gap-1 px-2 text-[11px]" onClick={() => openTool(tool.id)}>
+          <tool.icon className="size-3" /> {tool.name}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The roadmap: what to learn next, in what order, and how far through you are.
+ *
+ * The browse and revise views answer "what exists" and "what is due". Neither
+ * answers "what should I do this evening", which is the question that actually
+ * stalls revision — so this one is ranked, shows progress against each rank,
+ * and names the single next thing.
+ */
+function RoadmapView({
+  questions,
+  progress,
+  onStudy,
+}: {
+  questions: Question[];
+  progress: Record<string, "known" | "review">;
+  onStudy: (topic: TopicId) => void;
+}) {
+  const openTool = useAppStore((s) => s.openTool);
+
+  const byTopic = useMemo(() => {
+    const totals = new Map<TopicId, { total: number; known: number }>();
+    for (const q of questions) {
+      const entry = totals.get(q.topic) ?? { total: 0, known: 0 };
+      entry.total++;
+      if (progress[q.id] === "known") entry.known++;
+      totals.set(q.topic, entry);
+    }
+    return totals;
+  }, [questions, progress]);
+
+  const fraction = (topic: TopicId) => {
+    const entry = byTopic.get(topic);
+    return entry && entry.total ? entry.known / entry.total : 0;
+  };
+
+  const next = useMemo(() => nextSkill(fraction), [byTopic]);
+  const bands: Band[] = ["critical", "important", "useful"];
+
+  return (
+    <div className="space-y-4">
+      {next && (
+        <section className="rounded-lg border border-primary/40 bg-primary/5 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Study next</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className="text-base font-semibold">{next.rank}. {next.name}</span>
+            <Badge variant="outline" className="text-[10px]">target {"★".repeat(next.target)}</Badge>
+            <Badge variant="secondary" className="text-[10px]">{Math.round(fraction(next.topic) * 100)}% known</Badge>
+            <Button size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => onStudy(next.topic)}>
+              Revise <ArrowRight className="size-3" />
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{next.why}</p>
+        </section>
+      )}
+
+      {bands.map((band) => (
+        <section key={band}>
+          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {bandLabel(band)}
+          </h3>
+          <div className="space-y-1">
+            {SKILLS.filter((s) => s.band === band).map((skill) => (
+              <SkillRow
+                key={skill.rank}
+                skill={skill}
+                known={fraction(skill.topic)}
+                cards={byTopic.get(skill.topic)?.total ?? 0}
+                onStudy={() => onStudy(skill.topic)}
+                onOpenTool={openTool}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Checklists — say the line for every item and you can hold that conversation
+        </h3>
+        {TRACKS.map((track) => (
+          <details key={track.id} className="rounded-lg border border-border">
+            <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+              {track.label} <span className="text-xs font-normal text-muted-foreground">— {track.intent}</span>
+            </summary>
+            <div className="divide-y divide-border border-t border-border">
+              {track.items.map((item) => (
+                <div key={item.name} className="flex gap-2 px-3 py-1.5">
+                  <span
+                    className={cn(
+                      "mt-1 size-1.5 shrink-0 rounded-full",
+                      item.band === "critical" ? "bg-destructive" : item.band === "important" ? "bg-warning" : "bg-muted-foreground",
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium">{item.name}</div>
+                    <div className="text-xs text-muted-foreground">{item.must}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function SkillRow({
+  skill,
+  known,
+  cards,
+  onStudy,
+  onOpenTool,
+}: {
+  skill: Skill;
+  known: number;
+  cards: number;
+  onStudy: () => void;
+  onOpenTool: (toolId: string) => void;
+}) {
+  const tools = (skill.tools ?? []).map(getTool).filter((t): t is NonNullable<ReturnType<typeof getTool>> => !!t);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
+      <span className="w-6 shrink-0 text-xs tabular-nums text-muted-foreground">{skill.rank}</span>
+      <button className="min-w-0 flex-1 text-left" onClick={onStudy} disabled={!cards}>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{skill.name}</span>
+          <span className="text-[10px] text-warning">{"★".repeat(skill.target)}</span>
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{skill.why}</div>
+      </button>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {cards > 0 ? (
+          <>
+            <div className="h-1.5 w-20 overflow-hidden rounded-full bg-secondary">
+              <div className="h-full bg-primary" style={{ width: `${Math.round(known * 100)}%` }} />
+            </div>
+            <span className="w-9 text-right text-[10px] tabular-nums text-muted-foreground">{Math.round(known * 100)}%</span>
+          </>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">no cards yet</span>
+        )}
+        {tools.map((tool) => (
+          <button
+            key={tool.id}
+            title={`Practise in ${tool.name}`}
+            aria-label={`Practise in ${tool.name}`}
+            onClick={() => onOpenTool(tool.id)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Wrench className="size-3.5" />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
