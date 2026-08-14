@@ -48,6 +48,7 @@ import {
   FileCog,
   CalendarClock,
   Map as MapIcon,
+  NotebookPen,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -594,6 +595,21 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/star-map",
     component: L(() => import("./impl/StarMap"), "StarMap"),
+  },
+  {
+    id: "notes",
+    name: "Notes",
+    description: "Markdown notes that link to each other — tags, tasks, backlinks, outline and local history, all read out of the text itself",
+    category: "gadgets",
+    icon: NotebookPen,
+    keywords: [
+      "notes", "note", "notepad", "markdown", "md", "scratchpad", "journal", "diary",
+      "todo", "to-do", "task", "checklist", "tag", "tags", "wiki", "backlink", "link",
+      "zettelkasten", "outline", "template", "daily", "meeting", "decision", "adr",
+      "write", "draft", "memo", "history", "revision",
+    ],
+    route: "/tools/notes",
+    component: L(() => import("./impl/Notes"), "Notes"),
   },
 ];
 

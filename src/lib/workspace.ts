@@ -54,6 +54,7 @@ export const STORES: StoreSpec[] = [
   { key: "devhelper-db", label: "Database", describes: "saved connections (passwords were never persisted)" },
   { key: "devhelper-debug", label: "Debug sessions", describes: "captured timelines" },
   { key: "devhelper-snippets", label: "Snippets", describes: "saved code snippets and tags" },
+  { key: "devhelper-notes", label: "Notes", describes: "notes, their tags and their local history" },
   { key: "devhelper-projects", label: "Projects", describes: "project profiles and notes" },
   { key: "devhelper-learn", label: "Interview prep", describes: "revision progress and bookmarks" },
   { key: "devhelper-app", label: "App", describes: "theme, favorites and recents" },

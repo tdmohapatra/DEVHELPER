@@ -38,6 +38,7 @@ describe("STORES", () => {
       "devhelper-db",
       "devhelper-debug",
       "devhelper-learn",
+      "devhelper-notes",
       "devhelper-projects",
       "devhelper-snippets",
       "devhelper-sound",
