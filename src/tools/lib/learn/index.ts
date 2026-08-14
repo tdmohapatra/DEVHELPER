@@ -23,6 +23,9 @@ import { DEVICE_QUESTIONS } from "./devices";
 import { MICROSERVICE_QUESTIONS } from "./microservices";
 import { AZURE_SERVICE_QUESTIONS } from "./azureServices";
 import { DEVOPS_QUESTIONS } from "./devops";
+import { AI_QUESTIONS } from "./ai";
+import { PYTHON_DATA_QUESTIONS } from "./pythonData";
+import { FRONTEND_QUESTIONS } from "./frontend";
 import type { Level, Question, TopicId } from "./types";
 
 export * from "./types";
@@ -52,6 +55,9 @@ export const BUILT_IN_QUESTIONS: Question[] = [
   ...MICROSERVICE_QUESTIONS,
   ...AZURE_SERVICE_QUESTIONS,
   ...DEVOPS_QUESTIONS,
+  ...AI_QUESTIONS,
+  ...PYTHON_DATA_QUESTIONS,
+  ...FRONTEND_QUESTIONS,
 ];
 
 export interface QuestionFilter {
