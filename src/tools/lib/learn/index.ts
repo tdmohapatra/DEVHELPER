@@ -19,6 +19,8 @@ import { DOTNET_EXTRA, AZURE_EXTRA } from "./extraDotnetAzure";
 import { DATABASE_EXTRA, MESSAGING_EXTRA } from "./extraDataMessaging";
 import { PROGRAMMING_EXTRA, DSA_EXTRA, SYSTEM_DESIGN_EXTRA } from "./extraProgrammingDsaDesign";
 import { HEALTHCARE_QUESTIONS } from "./healthcare";
+import { DEVICE_QUESTIONS } from "./devices";
+import { MICROSERVICE_QUESTIONS } from "./microservices";
 import type { Level, Question, TopicId } from "./types";
 
 export * from "./types";
@@ -44,6 +46,8 @@ export const BUILT_IN_QUESTIONS: Question[] = [
   ...SYSTEM_DESIGN_QUESTIONS,
   ...SYSTEM_DESIGN_EXTRA,
   ...HEALTHCARE_QUESTIONS,
+  ...DEVICE_QUESTIONS,
+  ...MICROSERVICE_QUESTIONS,
 ];
 
 export interface QuestionFilter {

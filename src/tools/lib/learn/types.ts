@@ -78,7 +78,9 @@ export const TOPICS: Topic[] = [
   { id: "programming", label: "Programming", description: "Concurrency, testing, APIs, general craft", icon: "Braces" },
   { id: "dsa", label: "DSA", description: "Data structures, algorithms, complexity", icon: "Binary" },
   { id: "system-design", label: "System Design", description: "Scaling, consistency, architecture", icon: "Network" },
+  { id: "microservices", label: "Microservices", description: "Boundaries, CQRS, saga, outbox, resilience", icon: "Boxes" },
   { id: "healthcare", label: "Healthcare Domain", description: "FHIR, HL7 v2, HIPAA, EHR, terminology", icon: "HeartPulse" },
+  { id: "devices", label: "Medical Devices", description: "Gateways, MLLP, ASTM, DICOM, MQTT, IEEE 11073", icon: "Cable" },
 ];
 
 export const LEVELS: { id: Level; label: string }[] = [
