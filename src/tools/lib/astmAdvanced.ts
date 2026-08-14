@@ -35,6 +35,10 @@ export const MAX_FRAME_TEXT = 240;
 const CONTROL_NAMES: Record<string, string> = {
   [STX]: "<STX>", [ETX]: "<ETX>", [EOT]: "<EOT>", [ENQ]: "<ENQ>",
   [ACK]: "<ACK>", [NAK]: "<NAK>", [ETB]: "<ETB>", [CR]: "<CR>", [LF]: "<LF>",
+  // MLLP's framing bytes. Not ASTM's, but a transcript shows both protocols
+  // and "<0x0B>" is exactly the unreadable rendering this function exists to
+  // avoid.
+  "\x0b": "<VT>", "\x1c": "<FS>",
 };
 
 /** Render control characters as readable tokens (`<STX>`, `<CR>` …). */

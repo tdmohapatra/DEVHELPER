@@ -243,6 +243,33 @@ export function DeviceLink() {
     return () => { cancelled = true; stop?.(); };
   }, [native, handleData, push]);
 
+  /**
+   * Adopt links that were already open.
+   *
+   * The sockets live in Rust, so they survive a reload of this screen — and an
+   * open port you cannot see is one you cannot close. A serial port is assumed
+   * to be speaking ASTM and a TCP link MLLP, which is what opened them here.
+   */
+  useEffect(() => {
+    if (!native) return;
+    (async () => {
+      try {
+        const existing = await invokeNative<{ id: string; kind: OpenLink["kind"]; label: string }[]>("link_list");
+        if (!existing.length) return;
+        const adopted = existing.map((l) => ({ ...l, mode: (l.kind === "serial" ? "astm" : "mllp") as LinkMode }));
+        for (const l of adopted) {
+          modes.current.set(l.id, l.mode);
+          lastActivity.current.set(l.id, Date.now());
+          if (l.mode === "astm") astm.current.set(l.id, astmLink());
+        }
+        setLinks(adopted);
+        push({ linkId: adopted[0].id, direction: "info", text: `Adopted ${adopted.length} link(s) still open from before` });
+      } catch {
+        // Nothing open, or the command is unavailable — neither is worth a toast.
+      }
+    })();
+  }, [native, push]);
+
   /** ASTM inactivity. A link that stops mid-transfer has to end, not hang. */
   useEffect(() => {
     const timer = setInterval(() => {
@@ -577,7 +604,10 @@ export function DeviceLink() {
                   {e.note && <div className="pl-20 text-[10px] text-warning">{e.note}</div>}
                   {e.message && (
                     <div className="group relative mt-1 pl-20">
-                      <pre className="mono max-h-40 overflow-auto whitespace-pre-wrap rounded bg-secondary/40 p-2 text-[11px]">{e.message}</pre>
+                      <pre className="mono max-h-40 overflow-auto whitespace-pre-wrap rounded bg-secondary/40 p-2 text-[11px]">
+                        {/* HL7 separates segments with CR, which renders as nothing at all. */}
+                        {e.message.replace(/\r\n?/g, "\n")}
+                      </pre>
                       <div className="absolute right-1 top-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                         <CopyButton value={e.message} />
                         {e.message.startsWith("H|") && (
