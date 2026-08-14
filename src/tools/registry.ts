@@ -49,6 +49,7 @@ import {
   CalendarClock,
   Map as MapIcon,
   NotebookPen,
+  Cable,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -263,6 +264,22 @@ export const TOOLS: Tool[] = [
     keywords: ["soap", "xml", "envelope", "wsdl", "webservice", "request"],
     route: "/tools/soap-tester",
     component: L(() => import("./impl/SoapTester"), "SoapTester"),
+  },
+  {
+    id: "device-link",
+    name: "Device Link",
+    description: "Talk to an analyser or interface engine — MLLP over TCP, ASTM E1381 over serial, with auto-ACK and a byte-level transcript",
+    category: "healthcare",
+    icon: Cable,
+    keywords: [
+      "device", "analyser", "analyzer", "instrument", "interface", "engine", "mllp", "hl7",
+      "astm", "e1381", "e1394", "serial", "rs232", "rs-232", "com port", "tcp", "socket",
+      "listener", "ack", "nak", "enq", "eot", "frame", "checksum", "lis", "lims", "his",
+      "middleware", "mirth", "rhapsody", "sysmex", "mindray", "roche", "erba", "cobas",
+    ],
+    route: "/tools/device-link",
+    requiresNative: true,
+    component: L(() => import("./impl/DeviceLink"), "DeviceLink"),
   },
   {
     id: "jwt-decoder",
