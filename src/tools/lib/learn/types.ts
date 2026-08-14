@@ -16,7 +16,14 @@ export type TopicId =
   | "messaging"
   | "programming"
   | "dsa"
-  | "system-design";
+  | "system-design"
+  | "healthcare"
+  | "devices"
+  | "microservices"
+  | "devops"
+  | "ai"
+  | "python-data"
+  | "frontend";
 
 export type Level = "basic" | "intermediate" | "advanced";
 
@@ -41,6 +48,14 @@ export interface Question {
   diagram?: string;
   followUps?: FollowUp[];
   tags: string[];
+  /**
+   * Tool ids this card can be practised in, e.g. `["hl7-toolkit", "device-link"]`.
+   *
+   * Reading about MLLP framing and watching a real <VT> go down a socket are not
+   * the same act, and the gap between them is where the understanding is. The
+   * card offers the tool; the tool offers the card back.
+   */
+  relatedTools?: string[];
   /** True for questions that come up in almost every interview on the topic. */
   mustKnow?: boolean;
 }
@@ -63,6 +78,7 @@ export const TOPICS: Topic[] = [
   { id: "programming", label: "Programming", description: "Concurrency, testing, APIs, general craft", icon: "Braces" },
   { id: "dsa", label: "DSA", description: "Data structures, algorithms, complexity", icon: "Binary" },
   { id: "system-design", label: "System Design", description: "Scaling, consistency, architecture", icon: "Network" },
+  { id: "healthcare", label: "Healthcare Domain", description: "FHIR, HL7 v2, HIPAA, EHR, terminology", icon: "HeartPulse" },
 ];
 
 export const LEVELS: { id: Level; label: string }[] = [

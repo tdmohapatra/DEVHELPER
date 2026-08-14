@@ -18,9 +18,11 @@ import { CSHARP_EXTRA, OOP_EXTRA } from "./extraCsharpOop";
 import { DOTNET_EXTRA, AZURE_EXTRA } from "./extraDotnetAzure";
 import { DATABASE_EXTRA, MESSAGING_EXTRA } from "./extraDataMessaging";
 import { PROGRAMMING_EXTRA, DSA_EXTRA, SYSTEM_DESIGN_EXTRA } from "./extraProgrammingDsaDesign";
+import { HEALTHCARE_QUESTIONS } from "./healthcare";
 import type { Level, Question, TopicId } from "./types";
 
 export * from "./types";
+export * from "./roadmap";
 
 export const BUILT_IN_QUESTIONS: Question[] = [
   ...CSHARP_QUESTIONS,
@@ -41,6 +43,7 @@ export const BUILT_IN_QUESTIONS: Question[] = [
   ...DSA_EXTRA,
   ...SYSTEM_DESIGN_QUESTIONS,
   ...SYSTEM_DESIGN_EXTRA,
+  ...HEALTHCARE_QUESTIONS,
 ];
 
 export interface QuestionFilter {
@@ -80,6 +83,17 @@ function score(q: Question, needle: string): number {
   if (q.code?.toLowerCase().includes(needle)) total += 1;
   if (q.followUps?.some((f) => f.question.toLowerCase().includes(needle))) total += 3;
   return total;
+}
+
+/**
+ * The cards that can be practised in a given tool.
+ *
+ * This is what lets a tool offer its own concepts back: the Device Link screen
+ * can ask the catalogue what it is for, without the catalogue knowing anything
+ * about the UI.
+ */
+export function questionsForTool(questions: Question[], toolId: string): Question[] {
+  return questions.filter((q) => q.relatedTools?.includes(toolId));
 }
 
 /** Questions grouped by subtopic, preserving catalogue order. */
