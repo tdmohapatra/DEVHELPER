@@ -12,3 +12,4 @@ pub mod nats;
 pub mod secrets;
 pub mod toolchain;
 pub mod ws;
+pub mod devicelink;

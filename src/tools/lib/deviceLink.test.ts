@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  mllpReader, mllpFeed, mllpPreview,
+  mllpReader, mllpFeed, mllpPreview, textToWire, wireToText,
   astmLink, astmSend, astmFeed, astmTimeout, astmProgress, ASTM_MAX_RETRIES,
   replayPlan, replayDuration, transcriptText,
   type AstmLink, type WireEvent,
@@ -82,6 +82,31 @@ describe("MLLP stream reader", () => {
 
   it("shows the framing bytes by name", () => {
     expect(mllpPreview("MSH|x")).toBe("<VT>MSH|x<FS><CR>\n");
+  });
+});
+
+describe("encoding", () => {
+  it("round-trips text through the wire as UTF-8", () => {
+    const text = "OBX|1|ST|note||naïve résumé ✓";
+    expect(wireToText(textToWire(text))).toBe(text);
+  });
+
+  it("makes every wire character a single byte", () => {
+    const wire = textToWire("é✓");
+    expect(wire.length).toBe(5); // 2 bytes + 3 bytes
+    expect([...wire].every((c) => c.charCodeAt(0) <= 0xff)).toBe(true);
+  });
+
+  it("leaves control characters alone", () => {
+    expect(textToWire("\x0bMSH|\x1c\r")).toBe("\x0bMSH|\x1c\r");
+  });
+
+  it("marks what Latin-1 cannot carry instead of dropping it", () => {
+    expect(textToWire("a✓b", "latin-1")).toBe("a?b");
+  });
+
+  it("passes Latin-1 through unchanged in both directions", () => {
+    expect(wireToText(textToWire("café", "latin-1"), "latin-1")).toBe("café");
   });
 });
 

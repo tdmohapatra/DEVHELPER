@@ -112,6 +112,42 @@ export function mllpFeed(reader: MllpReader, chunk: string, maxBuffer = MLLP_MAX
 /** Frame a message and show it as it will go on the wire. */
 export const mllpPreview = (raw: string): string => describeFraming(`${MLLP_START}${raw}${MLLP_END}`);
 
+/* ================================================================== encoding */
+
+/**
+ * Text → the byte string the transport carries.
+ *
+ * A device link moves bytes; the Rust side represents them as Latin-1, one char
+ * per byte. A message typed in the UI is a JavaScript string, so anything above
+ * U+00FF has to become bytes explicitly. Which encoding is not ours to guess —
+ * HL7 declares it in MSH-18 and analysers vary — so the caller chooses, and the
+ * default is UTF-8 because that is what MSH-18 usually says now.
+ */
+export function textToWire(text: string, encoding: "utf-8" | "latin-1" = "utf-8"): string {
+  if (encoding === "latin-1") {
+    let out = "";
+    for (const ch of text) {
+      const code = ch.codePointAt(0) ?? 0;
+      // No silent substitution: a character with no Latin-1 byte becomes "?",
+      // and the caller can see that in the preview before sending.
+      out += code > 0xff ? "?" : ch;
+    }
+    return out;
+  }
+  const bytes = new TextEncoder().encode(text);
+  let out = "";
+  for (const b of bytes) out += String.fromCharCode(b);
+  return out;
+}
+
+/** The wire's byte string → text. The inverse of `textToWire`. */
+export function wireToText(wire: string, encoding: "utf-8" | "latin-1" = "utf-8"): string {
+  if (encoding === "latin-1") return wire;
+  const bytes = new Uint8Array(wire.length);
+  for (let i = 0; i < wire.length; i++) bytes[i] = wire.charCodeAt(i) & 0xff;
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 /* ================================================================ ASTM E1381 */
 
 export type AstmPhase =

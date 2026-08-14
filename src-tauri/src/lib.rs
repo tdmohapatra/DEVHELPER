@@ -1,7 +1,8 @@
 mod commands;
 
 use commands::{
-    db, docker, files, mssql, nats, network, ports, process, redis, secrets, sysprobe, system, toolchain, ws,
+    db, devicelink, docker, files, mssql, nats, network, ports, process, redis, secrets, sysprobe, system,
+    toolchain, ws,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -47,6 +48,8 @@ pub fn run() {
         // Held Redis connections for SUBSCRIBE and MONITOR, which a
         // command-per-call client cannot do.
         .manage(redis::RedisWatchers::default())
+        // Live device links: MLLP over TCP and ASTM over a serial port.
+        .manage(devicelink::LinkRegistry::default())
         .setup(move |app| {
             // System tray with a quick-actions menu.
             let open = MenuItem::with_id(app, "open", "Open DevHelper", true, None::<&str>)?;
@@ -106,6 +109,13 @@ pub fn run() {
             secrets::secret_get,
             secrets::secret_delete,
             secrets::secret_available,
+            devicelink::link_tcp_connect,
+            devicelink::link_tcp_listen,
+            devicelink::link_serial_ports,
+            devicelink::link_serial_open,
+            devicelink::link_send,
+            devicelink::link_close,
+            devicelink::link_list,
             toolchain::toolchain_probe,
             toolchain::toolchain_install,
             toolchain::toolchain_winget_available,
