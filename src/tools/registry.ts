@@ -39,6 +39,7 @@ import {
   Hospital,
   FileBadge,
   Radar,
+  RefreshCcw,
   Antenna,
   Bug,
   FileSearch,
@@ -367,6 +368,19 @@ export const TOOLS: Tool[] = [
     route: "/tools/phi-scanner",
     requiresNative: true,
     component: L(() => import("./impl/PhiScanner"), "PhiScanner"),
+  },
+  {
+    id: "retry-designer",
+    name: "Retry & Resilience",
+    description: "What a retry policy actually costs, plus breaker, idempotency and poison messages",
+    category: "integration",
+    icon: RefreshCcw,
+    keywords: [
+      "retry", "backoff", "jitter", "exponential", "polly", "resilience", "circuit breaker", "timeout",
+      "idempotency", "idempotent", "poison", "dead letter", "dlq", "transient", "429", "503", "thundering herd",
+    ],
+    route: "/tools/retry-designer",
+    component: L(() => import("./impl/RetryDesigner"), "RetryDesigner"),
   },
   {
     id: "jwt-decoder",
