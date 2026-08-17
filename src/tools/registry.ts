@@ -41,6 +41,7 @@ import {
   Radar,
   RefreshCcw,
   HeartHandshake,
+  ScanText,
   Antenna,
   Bug,
   FileSearch,
@@ -395,6 +396,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/health-board",
     component: L(() => import("./impl/HealthBoard"), "HealthBoard"),
+  },
+  {
+    id: "code-review",
+    name: "Code Review Assistant",
+    description: "Integration mistakes that compile cleanly and fail in production",
+    category: "ai",
+    icon: ScanText,
+    keywords: [
+      "review", "code review", "lint", "pr", "pull request", "httpclient", "async", "deadlock", "idempotent",
+      "phi", "logging", "sql injection", "datetime", "checklist", "quality", "csharp", "c#",
+    ],
+    route: "/tools/code-review",
+    component: L(() => import("./impl/CodeReviewAssistant"), "CodeReviewAssistant"),
   },
   {
     id: "jwt-decoder",
