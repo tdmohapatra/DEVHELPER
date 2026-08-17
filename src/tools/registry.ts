@@ -34,6 +34,7 @@ import {
   Rabbit,
   CloudCog,
   ArrowLeftRight,
+  ScanSearch,
   Antenna,
   Bug,
   FileSearch,
@@ -295,6 +296,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/field-mapper",
     component: L(() => import("./impl/FieldMapper"), "FieldMapper"),
+  },
+  {
+    id: "terminology",
+    name: "Terminology Toolkit",
+    description: "ICD-10, CPT, LOINC, SNOMED, NDC — structure, check digits and your crosswalk",
+    category: "healthcare",
+    icon: ScanSearch,
+    keywords: [
+      "icd", "icd-10", "icd10", "cpt", "hcpcs", "loinc", "snomed", "ndc", "rxnorm", "code", "codes", "coding",
+      "terminology", "crosswalk", "check digit", "verhoeff", "diagnosis", "procedure", "vocabulary", "mapping",
+    ],
+    route: "/tools/terminology",
+    component: L(() => import("./impl/TerminologyToolkit"), "TerminologyToolkit"),
   },
   {
     id: "jwt-decoder",
