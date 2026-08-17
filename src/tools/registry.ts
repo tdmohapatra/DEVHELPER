@@ -33,6 +33,7 @@ import {
   HardDrive,
   Rabbit,
   CloudCog,
+  ArrowLeftRight,
   Antenna,
   Bug,
   FileSearch,
@@ -281,6 +282,19 @@ export const TOOLS: Tool[] = [
     route: "/tools/device-link",
     requiresNative: true,
     component: L(() => import("./impl/DeviceLink"), "DeviceLink"),
+  },
+  {
+    id: "field-mapper",
+    name: "Field Mapper",
+    description: "Map one system's fields onto another's, and see what is not covered",
+    category: "healthcare",
+    icon: ArrowLeftRight,
+    keywords: [
+      "map", "mapping", "field", "transform", "crosswalk", "interface", "spec", "hl7", "fhir", "csv", "json",
+      "emr", "integration", "coverage", "unmapped", "codegen", "c#",
+    ],
+    route: "/tools/field-mapper",
+    component: L(() => import("./impl/FieldMapper"), "FieldMapper"),
   },
   {
     id: "jwt-decoder",
