@@ -32,6 +32,7 @@ import {
   ScrollText,
   HardDrive,
   Rabbit,
+  CloudCog,
   Antenna,
   Bug,
   FileSearch,
@@ -393,6 +394,20 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/rabbitmq",
     component: L(() => import("./impl/RabbitMqTool"), "RabbitMqTool"),
+  },
+  {
+    id: "service-bus",
+    name: "Azure Service Bus",
+    description: "Queues, topics, subscriptions and dead letters (REST + SAS)",
+    category: "messaging",
+    icon: CloudCog,
+    keywords: [
+      "azure", "service bus", "servicebus", "asb", "queue", "topic", "subscription", "dead letter", "dlq",
+      "deadletterqueue", "peek", "sas", "shared access", "broker", "message", "transfer dlq", "session",
+      "max delivery count", "lock", "namespace",
+    ],
+    route: "/tools/service-bus",
+    component: L(() => import("./impl/ServiceBusTool"), "ServiceBusTool"),
   },
   {
     id: "nats",

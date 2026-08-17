@@ -17,6 +17,7 @@ export type DebugSource =
   | "redis"
   | "nats"
   | "rabbitmq"
+  | "servicebus"
   | "http"
   | "websocket"
   | "custom";
@@ -57,6 +58,7 @@ export const DEBUG_SOURCES: { id: DebugSource; label: string }[] = [
   { id: "redis", label: "Redis" },
   { id: "nats", label: "NATS" },
   { id: "rabbitmq", label: "RabbitMQ" },
+  { id: "servicebus", label: "Service Bus" },
   { id: "websocket", label: "WebSocket" },
   { id: "custom", label: "Custom" },
 ];

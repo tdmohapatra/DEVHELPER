@@ -174,6 +174,68 @@ export function rabbitPublishEvent(target: string, routingKey: string, ok: boole
   };
 }
 
+export interface ServiceBusSnapshot {
+  /** The namespace host, which is what identifies it in a timeline. */
+  target: string;
+  queues?: number;
+  topics?: number;
+  subscriptions?: number;
+  active?: number;
+  /** Dead-lettered plus transfer dead-lettered — the number an incident turns on. */
+  deadLettered?: number;
+  findings: OpsFinding[];
+}
+
+/** Capture the Service Bus namespace view. */
+export function serviceBusNamespaceEvent(s: ServiceBusSnapshot): ParsedEvent {
+  return snapshotEvent("servicebus", s.target, "Service Bus namespace", s.findings, {
+    queues: s.queues,
+    topics: s.topics,
+    subscriptions: s.subscriptions,
+    active: s.active,
+    deadLettered: s.deadLettered,
+  });
+}
+
+/**
+ * Capture one peeked message.
+ *
+ * A dead-lettered message is captured as an error even though the peek itself
+ * succeeded: on a timeline, "this is the message that failed" is the event, and
+ * the reason the broker recorded is the closest thing to a stack trace there is.
+ */
+export function serviceBusMessageEvent(
+  target: string,
+  entity: string,
+  message: { properties: Record<string, unknown>; body: string },
+  deadLetter: boolean,
+): ParsedEvent {
+  const props = message.properties;
+  const reason = typeof props.DeadLetterReason === "string" ? props.DeadLetterReason : undefined;
+  const description = typeof props.DeadLetterErrorDescription === "string" ? props.DeadLetterErrorDescription : undefined;
+  return {
+    source: "servicebus",
+    status: deadLetter ? "error" : "info",
+    service: entity,
+    title: `${deadLetter ? "Dead-lettered" : "Message"} on ${entity}${reason ? ` — ${reason}` : ""}`,
+    correlationId: typeof props.CorrelationId === "string" ? props.CorrelationId : undefined,
+    error: deadLetter ? [reason, description].filter(Boolean).join(": ").slice(0, 800) || "Dead-lettered with no reason recorded." : undefined,
+    payload: JSON.stringify({ target, entity, properties: props, body: message.body.slice(0, 2000) }),
+  };
+}
+
+/** Capture a single send — the one thing the Service Bus tool does that changes state. */
+export function serviceBusSendEvent(target: string, entity: string, ok: boolean, detail?: string): ParsedEvent {
+  return {
+    source: "servicebus",
+    status: ok ? "ok" : "error",
+    service: entity,
+    title: `Send → ${entity}${ok ? "" : " failed"}`,
+    error: ok ? undefined : detail?.slice(0, 800),
+    payload: JSON.stringify({ target, entity, body: detail?.slice(0, 1000) }),
+  };
+}
+
 /**
  * Capture a connection that never came up.
  *

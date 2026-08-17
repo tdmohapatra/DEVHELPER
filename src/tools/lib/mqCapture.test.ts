@@ -6,6 +6,9 @@ import {
   natsServerEvent,
   rabbitBrokerEvent,
   rabbitPublishEvent,
+  serviceBusMessageEvent,
+  serviceBusNamespaceEvent,
+  serviceBusSendEvent,
   redisCommandEvent,
   redisHealthEvent,
   severityStatus,
@@ -152,6 +155,65 @@ describe("rabbitPublishEvent", () => {
     const e = rabbitPublishEvent("localhost:15672", "orders.created", false, "404 Not Found");
     expect(e.status).toBe("error");
     expect(e.error).toBe("404 Not Found");
+  });
+});
+
+describe("serviceBusNamespaceEvent", () => {
+  it("carries the counts and takes its status from the worst finding", () => {
+    const e = serviceBusNamespaceEvent({
+      target: "labs.servicebus.windows.net",
+      queues: 3,
+      topics: 1,
+      subscriptions: 2,
+      active: 40,
+      deadLettered: 7,
+      findings: [{ severity: "bad", subject: "orders", message: "7 dead-lettered" }],
+    });
+    expect(e.source).toBe("servicebus");
+    expect(e.status).toBe("error");
+    expect(JSON.parse(e.payload!)).toMatchObject({ queues: 3, subscriptions: 2, deadLettered: 7 });
+  });
+
+  it("is ok when nothing is wrong", () => {
+    const e = serviceBusNamespaceEvent({ target: "labs.servicebus.windows.net", findings: [] });
+    expect(e.status).toBe("ok");
+    expect(e.title).toMatch(/healthy/);
+  });
+});
+
+describe("serviceBusMessageEvent", () => {
+  it("records a dead-lettered message as the error it is, with the broker's reason", () => {
+    const e = serviceBusMessageEvent(
+      "labs.servicebus.windows.net",
+      "orders",
+      { properties: { DeadLetterReason: "MaxDeliveryCountExceeded", DeadLetterErrorDescription: "gave up", CorrelationId: "c-1" }, body: "{}" },
+      true,
+    );
+    expect(e.status).toBe("error");
+    expect(e.title).toMatch(/Dead-lettered on orders — MaxDeliveryCountExceeded/);
+    expect(e.error).toBe("MaxDeliveryCountExceeded: gave up");
+    expect(e.correlationId).toBe("c-1");
+  });
+
+  it("says so when a dead letter carries no reason at all", () => {
+    const e = serviceBusMessageEvent("ns", "orders", { properties: {}, body: "" }, true);
+    expect(e.error).toMatch(/no reason recorded/);
+  });
+
+  it("records a live message as information, not a failure", () => {
+    const e = serviceBusMessageEvent("ns", "orders", { properties: { MessageId: "m" }, body: "hi" }, false);
+    expect(e.status).toBe("info");
+    expect(e.error).toBeUndefined();
+  });
+});
+
+describe("serviceBusSendEvent", () => {
+  it("records both outcomes", () => {
+    expect(serviceBusSendEvent("ns", "orders", true, "{}").status).toBe("ok");
+    const failed = serviceBusSendEvent("ns", "orders", false, "401 rejected");
+    expect(failed.status).toBe("error");
+    expect(failed.title).toMatch(/failed$/);
+    expect(failed.error).toBe("401 rejected");
   });
 });
 
