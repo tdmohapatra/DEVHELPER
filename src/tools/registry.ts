@@ -38,6 +38,7 @@ import {
   Receipt,
   Hospital,
   FileBadge,
+  Radar,
   Antenna,
   Bug,
   FileSearch,
@@ -352,6 +353,20 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/certificate-inspector",
     component: L(() => import("./impl/CertificateInspector"), "CertificateInspector"),
+  },
+  {
+    id: "phi-scanner",
+    name: "PHI Scanner",
+    description: "Find patient data in logs, exports and table columns",
+    category: "security",
+    icon: Radar,
+    keywords: [
+      "phi", "pii", "scan", "logs", "leak", "hipaa", "audit", "columns", "database", "export", "csv",
+      "redact", "deidentify", "privacy", "compliance", "discovery", "sensitive",
+    ],
+    route: "/tools/phi-scanner",
+    requiresNative: true,
+    component: L(() => import("./impl/PhiScanner"), "PhiScanner"),
   },
   {
     id: "jwt-decoder",

@@ -1,8 +1,8 @@
 mod commands;
 
 use commands::{
-    db, devicelink, docker, files, mssql, nats, network, ports, process, redis, secrets, sysprobe, system,
-    toolchain, ws,
+    db, devicelink, docker, files, mssql, nats, network, ports, process, redis, scan, secrets, sysprobe,
+    system, toolchain, ws,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -85,6 +85,7 @@ pub fn run() {
             network::ping,
             sysprobe::check_environment,
             files::read_text_file,
+            scan::list_files,
             redis::redis_exec,
             redis::redis_watch,
             redis::redis_unwatch,

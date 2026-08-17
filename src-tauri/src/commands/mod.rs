@@ -5,6 +5,7 @@ pub mod process;
 pub mod network;
 pub mod sysprobe;
 pub mod files;
+pub mod scan;
 pub mod redis;
 pub mod db;
 pub mod mssql;
