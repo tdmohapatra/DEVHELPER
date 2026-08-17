@@ -465,7 +465,7 @@ export function ServiceBusTool() {
                   />
                 </F>
                 <Button size="sm" onClick={peek} disabled={busy || !selected}>
-                  {fromDeadLetter ? <Skull className="size-3.5" /> : <Eye className="size-3.5" />} Peek
+                  {fromDeadLetter ? <Skull className="size-3.5" /> : <Eye className="size-3.5" />} Read messages
                 </Button>
               </div>
 
