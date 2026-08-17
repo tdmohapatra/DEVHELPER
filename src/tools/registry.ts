@@ -410,6 +410,19 @@ export const TOOLS: Tool[] = [
     component: L(() => import("./impl/ServiceBusTool"), "ServiceBusTool"),
   },
   {
+    id: "kql-pad",
+    name: "KQL Pad",
+    description: "Query Log Analytics and App Insights, with the cost mistakes flagged",
+    category: "diagnostics",
+    icon: CloudCog,
+    keywords: [
+      "kql", "kusto", "log analytics", "application insights", "app insights", "azure monitor", "logs", "query",
+      "workspace", "telemetry", "trace", "apprequests", "appexceptions", "summarize", "render", "timechart",
+    ],
+    route: "/tools/kql-pad",
+    component: L(() => import("./impl/KqlPad"), "KqlPad"),
+  },
+  {
     id: "nats",
     name: "NATS",
     description: "Server, connections, subjects and JetStream",

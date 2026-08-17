@@ -50,7 +50,7 @@ export const SKILLS: Skill[] = [
   { rank: 4, name: "System Design", band: "critical", target: 5, why: "The round that decides seniority. Breadth plus one defensible opinion per topic.", topic: "system-design" },
   { rank: 5, name: "FHIR", band: "critical", target: 5, why: "The specialisation. Modern healthcare interoperability is FHIR, and few .NET developers know it well.", topic: "healthcare", tools: ["fhir-toolkit", "api-tester"] },
   { rank: 6, name: "HL7 v2", band: "critical", target: 4, why: "What hospitals actually run today. FHIR is the future; v2 is the payroll.", topic: "healthcare", tools: ["hl7-toolkit", "device-link"] },
-  { rank: 7, name: "Azure", band: "critical", target: 4, why: "The cloud these roles deploy to; identity, messaging and observability matter most.", topic: "azure", tools: ["environments", "config-inspector"] },
+  { rank: 7, name: "Azure", band: "critical", target: 4, why: "The cloud these roles deploy to; identity, messaging and observability matter most.", topic: "azure", tools: ["service-bus", "kql-pad", "config-inspector"] },
   { rank: 8, name: "SQL Server", band: "critical", target: 4, why: "Backend fundamentals. Indexing and transactions come up in every backend loop.", topic: "database", tools: ["database-toolkit", "sql-formatter"] },
   { rank: 9, name: "Kafka", band: "critical", target: 4, why: "The default answer for event-driven architecture; partitions and offsets get asked directly.", topic: "messaging", tools: ["nats", "rabbitmq"] },
   { rank: 10, name: "Redis", band: "critical", target: 4, why: "Caching and distributed locks — the two distributed-systems questions most likely to be practical.", topic: "messaging", tools: ["redis"] },

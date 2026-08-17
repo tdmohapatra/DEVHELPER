@@ -72,7 +72,7 @@ export const AZURE_SERVICE_QUESTIONS: Question[] = [
       { question: "Service Bus or Event Hubs?", answer: "Service Bus for commands and work with per-message handling; Event Hubs for high-volume telemetry streams you may want to replay." },
     ],
     tags: ["service-bus", "queues", "topics", "sessions", "dead-letter", "azure"],
-    relatedTools: ["rabbitmq", "nats"],
+    relatedTools: ["service-bus", "rabbitmq", "nats"],
   },
   {
     id: "az-event-hubs",
@@ -133,7 +133,7 @@ export const AZURE_SERVICE_QUESTIONS: Question[] = [
       { question: "Why is a count in the portal not exact?", answer: "Sampling. Multiply by itemCount to estimate the true figure, or turn sampling off for the specific telemetry you must count exactly." },
     ],
     tags: ["application-insights", "telemetry", "sampling", "phi", "azure"],
-    relatedTools: ["trace-explorer", "log-viewer"],
+    relatedTools: ["kql-pad", "trace-explorer", "log-viewer"],
   },
   {
     id: "az-kql",
@@ -152,7 +152,7 @@ export const AZURE_SERVICE_QUESTIONS: Question[] = [
       { question: "How do you turn a query into an alert?", answer: "Save it as a log alert rule with a threshold and evaluation frequency. Alert on the symptom — filing rate at zero — rather than on CPU." },
     ],
     tags: ["kql", "log-analytics", "azure-monitor", "queries", "alerting"],
-    relatedTools: ["log-viewer"],
+    relatedTools: ["kql-pad", "log-viewer"],
   },
   {
     id: "az-containers",

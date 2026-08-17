@@ -142,6 +142,7 @@ Stream   ->  [ Event Hub partitions ] -> consumer group 1 (offset)
       },
     ],
     tags: ["service bus", "event hub", "event grid", "queue", "messaging"],
+    relatedTools: ["service-bus"],
   },
   {
     id: "az-app-config-secrets",
