@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { Sparkles, AlertTriangle, Settings as SettingsIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Sparkles, AlertTriangle, Settings as SettingsIcon, ShieldCheck, ShieldAlert } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/CopyButton";
 import { Markdown } from "@/components/Markdown";
 import { AddToDebug } from "@/components/AddToDebug";
-import { aiChat, aiDestinationLabel, AiNotConfiguredError, type ChatMessage } from "@/lib/ai";
+import { activePolicy, aiChat, aiDestinationLabel, AiNotConfiguredError, type ChatMessage } from "@/lib/ai";
+import { detectPhi, summarise } from "@/tools/lib/phi";
 import { useAiStore } from "@/stores/useAiStore";
 import { useAppStore } from "@/stores/useAppStore";
 import type { ParsedEvent } from "@/tools/lib/debugSession";
@@ -33,6 +34,14 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
   const configured = useAiStore((s) => s.isConfigured());
   const openView = useAppStore((s) => s.openView);
 
+  /*
+   * What the gateway would do to this input, shown before it is sent rather
+   * than after. `lib/ai` applies the policy either way — this is so the decision
+   * is visible while there is still time to change the input.
+   */
+  const { policy, local } = activePolicy();
+  const phi = useMemo(() => (policy === "off" ? [] : detectPhi(input)), [input, policy]);
+
   const run = async () => {
     if (!input.trim()) return;
     setLoading(true);
@@ -43,7 +52,7 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
         { role: "system", content: systemPrompt },
         { role: "user", content: buildUserPrompt(input) },
       ];
-      setOutput(await aiChat(messages));
+      setOutput(await aiChat(messages, toolId));
     } catch (e) {
       setError(e instanceof AiNotConfiguredError ? e.message : (e as Error).message);
     } finally {
@@ -65,6 +74,25 @@ export function AiPromptTool({ toolId, title, description, inputLabel, placehold
       <div className="mb-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
         ⚠ Running this sends your input to {aiDestinationLabel()}.
       </div>
+
+      {policy === "off" ? (
+        local && (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+            <ShieldCheck className="size-3.5" />
+            The model is on this machine, so nothing is redacted. Change that in the PHI Gateway.
+          </div>
+        )
+      ) : phi.length > 0 ? (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs">
+          <ShieldAlert className="size-3.5 text-warning" />
+          {policy === "warn"
+            ? `${summarise(phi)} found and will be sent as written — the policy is warn only.`
+            : `${summarise(phi)} will be replaced with tokens before this leaves, and put back into the answer.`}
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => openView({ kind: "tool", toolId: "phi-gateway" })}>
+            Review
+          </Button>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <div className="flex flex-col gap-1">

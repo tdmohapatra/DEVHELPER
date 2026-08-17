@@ -485,6 +485,19 @@ export const TOOLS: Tool[] = [
     component: L(() => import("./impl/ContextPack"), "ContextPack"),
   },
   {
+    id: "phi-gateway",
+    name: "PHI Gateway",
+    description: "What leaves the machine when an AI tool runs, and what is removed first",
+    category: "ai",
+    icon: ShieldAlert,
+    keywords: [
+      "phi", "pii", "hipaa", "safe harbor", "deidentify", "de-identify", "redact", "anonymise", "anonymize",
+      "privacy", "patient", "mrn", "aadhaar", "gateway", "ai", "prompt", "leak", "compliance", "mask",
+    ],
+    route: "/tools/phi-gateway",
+    component: L(() => import("./impl/PhiGateway"), "PhiGateway"),
+  },
+  {
     id: "error-explainer",
     name: "Error Explainer",
     description: "AI root-cause and fix for an error",
