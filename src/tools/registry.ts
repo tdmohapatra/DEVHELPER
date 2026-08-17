@@ -36,6 +36,7 @@ import {
   ArrowLeftRight,
   ScanSearch,
   Receipt,
+  Hospital,
   Antenna,
   Bug,
   FileSearch,
@@ -324,6 +325,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/claims-toolkit",
     component: L(() => import("./impl/ClaimsToolkit"), "ClaimsToolkit"),
+  },
+  {
+    id: "emr-connect",
+    name: "EMR Connect",
+    description: "SMART on FHIR — discovery, PKCE, backend services and launch context",
+    category: "healthcare",
+    icon: Hospital,
+    keywords: [
+      "smart", "smart on fhir", "emr", "ehr", "epic", "cerner", "oauth", "oauth2", "oidc", "pkce", "launch",
+      "token", "scope", "backend services", "client credentials", "jwt", "assertion", "rs384", "aud", "sandbox",
+    ],
+    route: "/tools/emr-connect",
+    component: L(() => import("./impl/EmrConnect"), "EmrConnect"),
   },
   {
     id: "jwt-decoder",
