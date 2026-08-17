@@ -37,6 +37,7 @@ import {
   ScanSearch,
   Receipt,
   Hospital,
+  FileBadge,
   Antenna,
   Bug,
   FileSearch,
@@ -338,6 +339,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/emr-connect",
     component: L(() => import("./impl/EmrConnect"), "EmrConnect"),
+  },
+  {
+    id: "certificate-inspector",
+    name: "Certificate Inspector",
+    description: "X.509 expiry, names, usage and chain problems, from a paste",
+    category: "security",
+    icon: FileBadge,
+    keywords: [
+      "certificate", "cert", "x509", "x.509", "pem", "der", "tls", "ssl", "mtls", "chain", "intermediate",
+      "expiry", "expired", "san", "subject alternative name", "handshake", "openssl", "pfx", "fingerprint", "ca",
+    ],
+    route: "/tools/certificate-inspector",
+    component: L(() => import("./impl/CertificateInspector"), "CertificateInspector"),
   },
   {
     id: "jwt-decoder",
