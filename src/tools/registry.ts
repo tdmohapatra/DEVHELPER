@@ -35,6 +35,7 @@ import {
   CloudCog,
   ArrowLeftRight,
   ScanSearch,
+  Receipt,
   Antenna,
   Bug,
   FileSearch,
@@ -309,6 +310,20 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/terminology",
     component: L(() => import("./impl/TerminologyToolkit"), "TerminologyToolkit"),
+  },
+  {
+    id: "claims-toolkit",
+    name: "Claims Toolkit",
+    description: "X12 EDI — 837 claims, 835 remittances and the envelope rules",
+    category: "healthcare",
+    icon: Receipt,
+    keywords: [
+      "x12", "edi", "claim", "claims", "837", "835", "270", "271", "276", "277", "834", "999", "997",
+      "remittance", "era", "eob", "payer", "clearinghouse", "isa", "gs", "st", "se", "clp", "cas", "plb",
+      "denial", "adjustment", "billing", "revenue cycle",
+    ],
+    route: "/tools/claims-toolkit",
+    component: L(() => import("./impl/ClaimsToolkit"), "ClaimsToolkit"),
   },
   {
     id: "jwt-decoder",
