@@ -1238,6 +1238,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "socket2 0.5.10",
  "sysinfo",
  "tauri",
  "tauri-build",

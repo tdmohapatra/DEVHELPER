@@ -3,6 +3,7 @@ import {
   mllpReader, mllpFeed, mllpPreview, textToWire, wireToText,
   astmLink, astmSend, astmFeed, astmTimeout, astmProgress, ASTM_MAX_RETRIES,
   replayPlan, replayDuration, transcriptText,
+  probeMessage, readAck, interpretProbe, probeSummary,
   type AstmLink, type WireEvent,
 } from "./deviceLink";
 import { ACK, CR, ENQ, EOT, ETB, ETX, LF, NAK, STX, astmChecksum, frameRecords } from "./astmAdvanced";
@@ -333,5 +334,84 @@ describe("replay", () => {
     expect(text).toContain("1.500s");
     expect(text).toContain("→ <ENQ>");
     expect(text).toContain("(asking)");
+  });
+});
+
+describe("probe", () => {
+  const ack = (code: string, text = "") =>
+    [`MSH|^~\&|RECEIVER|FACILITY|DEVHELPER|PROBE|20260101120000||ACK^A19|1|P|2.5`, `MSA|${code}|PROBE-1|${text}`].join("\r");
+
+  it("builds a query rather than anything that writes", () => {
+    const message = probeMessage("PROBE-1");
+    expect(message).toContain("QRY^A19");
+    expect(message).toContain("PROBE-1");
+    expect(message.startsWith("MSH|^~\&|DEVHELPER|PROBE|")).toBe(true);
+  });
+
+  it("is reproducible, so a test can assert on it", () => {
+    expect(probeMessage("X", "20200102030405")).toBe(probeMessage("X", "20200102030405"));
+    expect(probeMessage("X", "20200102030405")).toContain("20200102030405");
+  });
+
+  it("reads MSA-1 and MSA-3", () => {
+    expect(readAck(ack("AA"))).toEqual({ code: "AA", text: undefined });
+    expect(readAck(ack("AE", "unknown message type"))).toEqual({ code: "AE", text: "unknown message type" });
+    expect(readAck("MSH|^~\&|no msa here")).toEqual({});
+  });
+
+  it("calls a clean ACK healthy", () => {
+    const outcome = interpretProbe({ connected: true, bytesBack: "x", frames: [ack("AA")], waitedMs: 42 });
+    expect(outcome.verdict).toBe("healthy");
+    expect(outcome.ackCode).toBe("AA");
+    expect(outcome.message).toMatch(/42 ms/);
+  });
+
+  it("treats AE and AR as a pass, because the link is alive either way", () => {
+    for (const code of ["AE", "AR"]) {
+      const outcome = interpretProbe({ connected: true, bytesBack: "x", frames: [ack(code, "nope")], waitedMs: 10 });
+      expect(outcome.verdict).toBe("rejected");
+      expect(outcome.nextStep).toMatch(/pass for the question you asked/);
+    }
+    expect(probeSummary(interpretProbe({ connected: true, bytesBack: "x", frames: [ack("AR")], waitedMs: 1 }))).toMatch(/^PASS/);
+  });
+
+  it("calls silence the failure a port check hides", () => {
+    const outcome = interpretProbe({ connected: true, bytesBack: "", frames: [], waitedMs: 5000 });
+    expect(outcome.verdict).toBe("silent");
+    expect(outcome.message).toMatch(/nothing came back in 5000 ms/);
+    expect(outcome.nextStep).toMatch(/a port check calls this healthy/);
+    expect(probeSummary(outcome)).toMatch(/^FAIL \(accepts, never answers\)/);
+  });
+
+  it("recognises a web server on the port", () => {
+    const outcome = interpretProbe({ connected: true, bytesBack: "HTTP/1.1 404 Not Found\r\n", frames: [], waitedMs: 20 });
+    expect(outcome.verdict).toBe("malformed");
+    expect(outcome.nextStep).toMatch(/web server/);
+  });
+
+  it("separates unframed bytes from no bytes", () => {
+    const outcome = interpretProbe({ connected: true, bytesBack: "MSA|AA|1", frames: [], waitedMs: 20 });
+    expect(outcome.verdict).toBe("malformed");
+    expect(outcome.nextStep).toMatch(/plain-text HL7 rather than MLLP/);
+  });
+
+  it("says the link works when a frame came back with no MSA in it", () => {
+    const outcome = interpretProbe({ connected: true, bytesBack: "x", frames: ["MSH|^~\&|odd"], waitedMs: 20 });
+    expect(outcome.verdict).toBe("malformed");
+    expect(outcome.message).toMatch(/no MSA segment/);
+  });
+
+  it("reports an unreachable host with the reason it was given", () => {
+    const outcome = interpretProbe({ connected: false, connectError: "connection refused", bytesBack: "", frames: [], waitedMs: 0 });
+    expect(outcome.verdict).toBe("unreachable");
+    expect(outcome.message).toBe("connection refused");
+    expect(outcome.nextStep).toMatch(/netstat/);
+  });
+
+  it("round-trips through the real reader, so the frames it judges are real frames", () => {
+    const reader = mllpReader();
+    const wire = `${MLLP_START}${ack("AA")}${MLLP_END}`;
+    const fed = mllpFeed(reader, wire);
+    expect(interpretProbe({ connected: true, bytesBack: wire, frames: fed.messages, waitedMs: 8 }).verdict).toBe("healthy");
   });
 });

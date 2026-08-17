@@ -482,3 +482,159 @@ export function transcriptText(events: WireEvent[]): string {
     })
     .join("\n");
 }
+
+/* ===================================================================== PROBE */
+
+/**
+ * Answering "is the receiver working?".
+ *
+ * The question is asked constantly and a port check cannot answer it, because
+ * the interesting failures all happen *after* the TCP connection succeeds. A
+ * socket that accepts and then never replies looks perfectly healthy to
+ * anything that only dials the port — and that is the commonest state of a
+ * broken MLLP receiver: the listener is up, the engine behind it is not.
+ *
+ * So a probe connects, sends one framed message, and waits. What comes back
+ * separates five outcomes that a port check collapses into one, and each has a
+ * different next move.
+ */
+export type ProbeVerdict = "healthy" | "rejected" | "silent" | "malformed" | "unreachable";
+
+export interface ProbeOutcome {
+  verdict: ProbeVerdict;
+  /** What happened, in one sentence. */
+  message: string;
+  /** What to do about it. */
+  nextStep: string;
+  /** MSA-1 when an ACK came back at all. */
+  ackCode?: string;
+  /** MSA-3, the receiver's own explanation, when it sent one. */
+  ackText?: string;
+}
+
+/**
+ * A probe message.
+ *
+ * `QRY^A19` on purpose: it is a query, so a receiver that acts on it reads
+ * rather than writes, and nothing is created if the message is processed for
+ * real. That still cannot be guaranteed for every engine, which is why the tool
+ * says out loud that a probe sends a genuine message to a genuine interface.
+ *
+ * `nowStamp` is a parameter rather than a call to the clock so a probe is
+ * reproducible in a test.
+ */
+export function probeMessage(controlId: string, nowStamp = "20260101120000"): string {
+  return [
+    `MSH|^~\&|DEVHELPER|PROBE|RECEIVER|FACILITY|${nowStamp}||QRY^A19|${controlId}|P|2.5`,
+    `QRD|${nowStamp}|R|I|${controlId}|||1^RD|ALL|DEM`,
+  ].join("\r");
+}
+
+/**
+ * MSA-1 and MSA-3 out of an ACK.
+ *
+ * Read with a pattern rather than the full parser because an ACK from a
+ * misbehaving receiver may not survive parsing, and "it replied but I could not
+ * read it" is a different and more useful answer than an exception.
+ */
+export function readAck(message: string): { code?: string; text?: string } {
+  const m = /(?:^|[\r\n])MSA\|([^|\r\n]*)\|?([^|\r\n]*)\|?([^|\r\n]*)/.exec(message);
+  if (!m) return {};
+  return { code: m[1] || undefined, text: m[3] || undefined };
+}
+
+export interface ProbeInput {
+  /** Did the TCP connection succeed? */
+  connected: boolean;
+  /** Why not, when it did not. */
+  connectError?: string;
+  /** Everything that came back, as received. */
+  bytesBack: string;
+  /** Complete MLLP frames recovered from those bytes. */
+  frames: string[];
+  waitedMs: number;
+}
+
+/**
+ * Turn what happened into a verdict.
+ *
+ * The distinction that earns this function's existence is `rejected` versus
+ * `silent`. An `AE` or `AR` is a **pass** for the question being asked: the
+ * receiver is alive, it read the message and it disagreed with the content.
+ * Silence is the failure, and it is the one that a green port check hides.
+ */
+export function interpretProbe(input: ProbeInput): ProbeOutcome {
+  if (!input.connected) {
+    return {
+      verdict: "unreachable",
+      message: input.connectError ?? "The connection did not open.",
+      nextStep:
+        "Nothing is listening, or a firewall dropped it. Check the port is bound on the receiver's own host (`netstat -an | findstr LISTENING`), then that this machine can reach it.",
+    };
+  }
+
+  if (input.frames.length === 0) {
+    if (!input.bytesBack) {
+      return {
+        verdict: "silent",
+        message: `Connected and sent the message, then nothing came back in ${input.waitedMs} ms.`,
+        nextStep:
+          "This is a listener that accepts and does not answer — the socket is up, the thing behind it is not, so a port check calls this healthy. Look at whether the engine's inbound channel is started and whether it is configured to ACK. If it only ACKs message types it knows, it may be discarding this one silently, which is itself a finding.",
+      };
+    }
+    if (/^HTTP\/\d/.test(input.bytesBack)) {
+      return {
+        verdict: "malformed",
+        message: "Something answered with an HTTP response, not an MLLP frame.",
+        nextStep: "That port is a web server. The MLLP listener is on a different port, or this is the wrong host.",
+      };
+    }
+    return {
+      verdict: "malformed",
+      message: `${input.bytesBack.length} byte(s) came back, but none of it is an MLLP frame.`,
+      nextStep:
+        "Something is listening and speaking a different protocol, or it replies without the <VT> … <FS><CR> wrapper. Check the raw bytes below: an ACK with no framing is a receiver misconfigured for plain-text HL7 rather than MLLP.",
+    };
+  }
+
+  const { code, text } = readAck(input.frames[0]);
+  if (!code) {
+    return {
+      verdict: "malformed",
+      message: "A complete MLLP frame came back, but it carries no MSA segment.",
+      nextStep: "The link works. What it replied with is not an ACK — check what the receiver thinks it is sending.",
+      ackText: text,
+    };
+  }
+
+  if (code === "AA" || code === "CA") {
+    return {
+      verdict: "healthy",
+      message: `Acknowledged ${code} in ${input.waitedMs} ms. The receiver is up, framing correctly and accepting messages.`,
+      nextStep: "Nothing to do. Note that a QRY it accepted is not proof it will answer the query.",
+      ackCode: code,
+      ackText: text,
+    };
+  }
+
+  return {
+    verdict: "rejected",
+    message: `Replied ${code}${text ? `: ${text}` : ""} in ${input.waitedMs} ms.`,
+    nextStep:
+      "This is a pass for the question you asked — the link is alive, the receiver read the message and disagreed with it. AE is an application error, AR a rejection, usually an unsupported message type. A probe getting AR while real traffic gets AA is entirely normal.",
+    ackCode: code,
+    ackText: text,
+  };
+}
+
+/** One line for a log or a ticket. */
+export function probeSummary(outcome: ProbeOutcome): string {
+  const label: Record<ProbeVerdict, string> = {
+    healthy: "PASS",
+    rejected: "PASS (rejected the content)",
+    silent: "FAIL (accepts, never answers)",
+    malformed: "FAIL (not MLLP)",
+    unreachable: "FAIL (unreachable)",
+  };
+  return `${label[outcome.verdict]} — ${outcome.message}`;
+}

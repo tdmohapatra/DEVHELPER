@@ -28,6 +28,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::Notify;
 
 /// Event channel the UI subscribes to. Every event carries the link id.
 pub const LINK_EVENT: &str = "devicelink://event";
@@ -71,8 +72,10 @@ pub struct LinkInfo {
 enum Sink {
     /// Outbound bytes for a TCP connection or an accepted socket.
     Bytes(UnboundedSender<Vec<u8>>),
-    /// A listener has nothing to write to; closing it stops the accept loop.
-    Listener,
+    /// A listener has nothing to write to. It carries the signal that stops its
+    /// accept loop — an `AtomicBool` alone cannot, because the loop is parked
+    /// inside `accept()` and only looks at the flag when a connection arrives.
+    Listener(Arc<Notify>),
     /// Serial writes go through the port handle itself, which is blocking.
     Serial(Arc<Mutex<Box<dyn serialport::SerialPort>>>),
 }
@@ -114,6 +117,39 @@ fn emit_accept(app: &AppHandle, id: &str, parent: &str, peer: &str) {
             peer: Some(peer.to_string()),
         },
     );
+}
+
+/// Settle a freshly connected socket into the shape a device link needs.
+///
+/// Two settings, both for the same reason — a link that looks fine and is not.
+///
+/// Nagle batches small writes, which for MLLP means the `<FS><CR>` that ends a
+/// message can sit in the kernel waiting for more data that never comes: the
+/// receiver has most of a message and is waiting for the end of it.
+///
+/// Keepalive is the one that matters over days. Without it, an analyser that is
+/// switched off, or a cable pulled, leaves a socket that is open as far as this
+/// end is concerned — reads block forever and nothing is reported, because
+/// nothing arrived to report. With it, the connection fails and says so.
+fn configure_socket(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10));
+    let _ = socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive);
+}
+
+/// Drop a link from the registry.
+///
+/// Called when a loop ends rather than only from `link_close`, so a peer that
+/// hangs up stops being listed as open and a later send says "not open" instead
+/// of succeeding into a channel nobody is reading.
+fn forget(app: &AppHandle, id: &str) {
+    if let Some(state) = app.try_state::<LinkRegistry>() {
+        if let Ok(mut map) = state.0.lock() {
+            map.remove(id);
+        }
+    }
 }
 
 /// Bytes → Latin-1 string. One char per byte, no reinterpretation.
@@ -187,6 +223,8 @@ fn run_socket(app: AppHandle, id: String, stream: TcpStream, stop: Arc<AtomicBoo
                 }
             }
         }
+        // The socket is finished either way; stop listing it as open.
+        forget(&read_app, &read_id);
     });
 
     tx
@@ -209,9 +247,7 @@ pub async fn link_tcp_connect(
         .map_err(|_| format!("{address} did not answer within {} ms", timeout.as_millis()))?
         .map_err(|e| format!("Could not connect to {address}: {e}"))?;
 
-    // Nagle batches small writes, which for MLLP means the <FS><CR> that ends a
-    // message can sit in the kernel waiting for more data that never comes.
-    let _ = stream.set_nodelay(true);
+    configure_socket(&stream);
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| address.clone());
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -253,11 +289,17 @@ pub async fn link_tcp_listen(
 
     let id = uuid::Uuid::new_v4().to_string();
     let stop = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::new(Notify::new());
 
     register(
         &registry,
         &id,
-        Link { kind: "listener".into(), label: bind.clone(), sink: Sink::Listener, stop: stop.clone() },
+        Link {
+            kind: "listener".into(),
+            label: bind.clone(),
+            sink: Sink::Listener(shutdown.clone()),
+            stop: stop.clone(),
+        },
     )?;
 
     let accept_app = app.clone();
@@ -267,9 +309,18 @@ pub async fn link_tcp_listen(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            match listener.accept().await {
+            // Selecting on the shutdown signal is what actually releases the
+            // port. Checking a flag at the top of the loop cannot: the task is
+            // parked inside `accept()` and reaches the check only when a
+            // connection arrives, so a "closed" listener stays bound until one
+            // does — and rebinding the same port fails with "address in use".
+            let accepted = tokio::select! {
+                _ = shutdown.notified() => break,
+                result = listener.accept() => result,
+            };
+            match accepted {
                 Ok((stream, peer)) => {
-                    let _ = stream.set_nodelay(true);
+                    configure_socket(&stream);
                     let child = uuid::Uuid::new_v4().to_string();
                     let child_stop = Arc::new(AtomicBool::new(false));
                     let tx = run_socket(accept_app.clone(), child.clone(), stream, child_stop.clone());
@@ -297,6 +348,9 @@ pub async fn link_tcp_listen(
                 }
             }
         }
+        // Dropping the listener here is what frees the port; the emit only says so.
+        drop(listener);
+        forget(&accept_app, &accept_id);
         emit(&accept_app, &accept_id, "close", "Stopped listening", 0);
     });
 
@@ -333,6 +387,10 @@ pub struct SerialSettings {
     pub parity: Option<String>,
     /// 1 or 2
     pub stop_bits: Option<u8>,
+    /// `none` | `software` | `hardware`. Most ASTM analysers use none, but a few
+    /// assert RTS/CTS and simply never send until it is honoured — which looks
+    /// exactly like a dead instrument.
+    pub flow_control: Option<String>,
 }
 
 /// Open a serial port. Reads run on a blocking thread; the crate has no async API.
@@ -357,26 +415,44 @@ pub fn link_serial_open(
         2 => serialport::StopBits::Two,
         _ => serialport::StopBits::One,
     };
+    let flow_control = match settings.flow_control.as_deref().unwrap_or("none") {
+        "software" => serialport::FlowControl::Software,
+        "hardware" => serialport::FlowControl::Hardware,
+        _ => serialport::FlowControl::None,
+    };
 
     let port = serialport::new(&settings.path, settings.baud)
         .data_bits(data_bits)
         .parity(parity)
         .stop_bits(stop_bits)
+        .flow_control(flow_control)
         // Short read timeout, not "no timeout": the read loop has to come back
         // regularly to notice that the link was closed.
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| format!("Could not open {}: {e}", settings.path))?;
 
+    /*
+     * The reader gets its own handle on the same port.
+     *
+     * Sharing one handle behind a mutex meant every write waited for the read in
+     * progress to time out — up to the 200 ms below. ASTM is a handshake: the
+     * instrument sends ENQ and expects ACK, and a reply delayed behind an
+     * unrelated read is how a link that works on the bench stutters in the lab.
+     */
+    let mut reader = port
+        .try_clone()
+        .map_err(|e| format!("Could not open a second handle on {}: {e}", settings.path))?;
+
     let id = uuid::Uuid::new_v4().to_string();
     let stop = Arc::new(AtomicBool::new(false));
-    let handle = Arc::new(Mutex::new(port));
+    let writer = Arc::new(Mutex::new(port));
     let label = format!("{} @ {}", settings.path, settings.baud);
 
     register(
         &registry,
         &id,
-        Link { kind: "serial".into(), label: label.clone(), sink: Sink::Serial(handle.clone()), stop: stop.clone() },
+        Link { kind: "serial".into(), label: label.clone(), sink: Sink::Serial(writer), stop: stop.clone() },
     )?;
 
     let read_app = app.clone();
@@ -387,14 +463,7 @@ pub fn link_serial_open(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let read = {
-                let mut guard = match handle.lock() {
-                    Ok(g) => g,
-                    Err(_) => break,
-                };
-                guard.read(&mut buffer)
-            };
-            match read {
+            match reader.read(&mut buffer) {
                 Ok(0) => {}
                 Ok(n) => emit(&read_app, &read_id, "data", to_latin1(&buffer[..n]), n),
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
@@ -404,6 +473,7 @@ pub fn link_serial_open(
                 }
             }
         }
+        forget(&read_app, &read_id);
         emit(&read_app, &read_id, "close", "Port closed", 0);
     });
 
@@ -430,7 +500,9 @@ pub fn link_send(registry: State<'_, LinkRegistry>, id: String, data: String) ->
             guard.flush().map_err(|e| format!("Flush failed: {e}"))?;
             Ok(bytes.len())
         }
-        Sink::Listener => Err("A listener has nothing to send to. Reply on the accepted connection instead.".into()),
+        Sink::Listener(_) => {
+            Err("A listener has nothing to send to. Reply on the accepted connection instead.".into())
+        }
     }
 }
 
@@ -441,6 +513,12 @@ pub fn link_close(registry: State<'_, LinkRegistry>, id: String) -> Result<bool,
     match map.remove(&id) {
         Some(link) => {
             link.stop.store(true, Ordering::Relaxed);
+            // `notify_one` leaves a permit behind, so a loop that has not yet
+            // reached `notified()` still wakes. `notify_waiters` would drop the
+            // signal in exactly that race and leave the port bound.
+            if let Sink::Listener(shutdown) = &link.sink {
+                shutdown.notify_one();
+            }
             Ok(true)
         }
         None => Ok(false),
@@ -474,6 +552,46 @@ mod tests {
         // <VT> … <FS><CR> is an MLLP frame; none of it may be reinterpreted.
         let framed = b"\x0bMSH|^~\\&|\x1c\x0d";
         assert_eq!(from_latin1(&to_latin1(framed)).unwrap(), framed);
+    }
+
+    /// The shutdown pattern the accept loop uses actually frees the port.
+    ///
+    /// Worth a test because the obvious implementation does not. A loop parked in
+    /// `accept()` that only checks a flag at the top of each iteration stays
+    /// parked, holding the port, until a connection happens to arrive — so a
+    /// "closed" listener cannot be rebound and the failure is `address in use`
+    /// minutes later, nowhere near the close.
+    ///
+    /// This exercises the select-and-notify pair in isolation: the command itself
+    /// needs an `AppHandle` and a `State`, neither of which exists in a unit test.
+    #[tokio::test]
+    async fn a_closed_listener_releases_its_port() {
+        // Port 0 lets the OS choose, then we ask which it chose.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(Notify::new());
+
+        let task_shutdown = shutdown.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = task_shutdown.notified() => break,
+                    result = listener.accept() => {
+                        if result.is_err() { break; }
+                    }
+                }
+            }
+            drop(listener);
+        });
+
+        // Nothing ever connects, so the loop is parked exactly where the bug was.
+        shutdown.notify_one();
+        task.await.unwrap();
+
+        // Rebinding is the only proof that matters.
+        TcpListener::bind(("127.0.0.1", port))
+            .await
+            .expect("the port should be free once the accept loop has stopped");
     }
 
     #[test]

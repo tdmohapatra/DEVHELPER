@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Plug, PlugZap, Radio, Send, Play, Square, RefreshCw, Trash2, Download, CircleDot,
+  Plug, PlugZap, Radio, Send, Play, Square, RefreshCw, Trash2, Download, CircleDot, Stethoscope,
 } from "lucide-react";
 import { ToolShell } from "@/components/ToolShell";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,8 @@ import {
   mllpReader, mllpFeed, mllpPreview, textToWire, wireToText,
   astmLink, astmSend, astmFeed, astmTimeout, astmProgress,
   transcriptText,
-  type MllpReader, type AstmLink,
+  probeMessage, interpretProbe, probeSummary,
+  type MllpReader, type AstmLink, type ProbeOutcome,
 } from "@/tools/lib/deviceLink";
 import { MLLP_START, MLLP_END, buildAck, validateHl7Structure, ACK_CODES, type AckCode } from "@/tools/lib/hl7Advanced";
 import { astmToHl7, describeControlChars } from "@/tools/lib/astmAdvanced";
@@ -81,6 +82,10 @@ const ENTRY_LIMIT = 800;
 /** E1381 gives each side 15 seconds; past that the link is not coming back on its own. */
 const ASTM_TIMEOUT_MS = 15_000;
 
+/** How long a probe waits for the connection, then for an answer. */
+const PROBE_CONNECT_MS = 5_000;
+const PROBE_WAIT_MS = 5_000;
+
 const SAMPLE_HL7 = [
   "MSH|^~\\&|LIS|LAB|EMR|HOSP|20260814093000||ORU^R01|MSG0001|P|2.5",
   "PID|1||100234^^^HOSP^MR||PATEL^ANJALI||19880412|F",
@@ -107,6 +112,8 @@ export function DeviceLink() {
   const [port, setPort] = useState("2575");
   const [outbound, setOutbound] = useState(SAMPLE_HL7);
   const [encoding, setEncoding] = useState<"utf-8" | "latin-1">("utf-8");
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<ProbeOutcome | null>(null);
 
   // Listener
   const [listenPort, setListenPort] = useState("2575");
@@ -120,6 +127,7 @@ export function DeviceLink() {
   const [dataBits, setDataBits] = useState("8");
   const [parity, setParity] = useState("none");
   const [stopBits, setStopBits] = useState("1");
+  const [flowControl, setFlowControl] = useState("none");
   const [astmRecords, setAstmRecords] = useState(SAMPLE_ASTM);
 
   // Protocol state per link. Refs, not state: an event handler must see the
@@ -128,6 +136,10 @@ export function DeviceLink() {
   const astm = useRef(new Map<string, AstmLink>());
   const lastActivity = useRef(new Map<string, number>());
   const modes = useRef(new Map<string, LinkMode>());
+  // While a probe is in flight its bytes go here instead of through the normal
+  // handler, so the probe judges its own reply and nothing else lands in the
+  // transcript half-processed.
+  const probeBytes = useRef(new Map<string, string>());
   const started = useRef(Date.now());
   const counter = useRef(0);
   // Settings the event handler reads. It is registered once, so it would
@@ -153,6 +165,13 @@ export function DeviceLink() {
 
   const handleData = useCallback(async (id: string, data: string) => {
     lastActivity.current.set(id, Date.now());
+
+    const collecting = probeBytes.current.get(id);
+    if (collecting !== undefined) {
+      probeBytes.current.set(id, collecting + data);
+      return;
+    }
+
     const mode = modes.current.get(id) ?? "mllp";
 
     if (mode === "mllp") {
@@ -305,6 +324,69 @@ export function DeviceLink() {
     } catch (e) { fail(e); }
   };
 
+  /**
+   * Connect, send one framed message, and see what comes back.
+   *
+   * The whole point is what a port check cannot tell you: a socket that accepts
+   * and then never answers is the commonest broken MLLP receiver there is, and
+   * dialling the port calls it healthy. The link is opened and closed here rather
+   * than left in the list, because a probe is a question, not a session.
+   */
+  const runProbe = async () => {
+    setProbing(true);
+    setProbe(null);
+    let id: string | null = null;
+    const startedAt = performance.now();
+    try {
+      try {
+        id = await invokeNative<string>("link_tcp_connect", { host, port: Number(port), timeoutMs: PROBE_CONNECT_MS });
+      } catch (e) {
+        setProbe(interpretProbe({ connected: false, connectError: e instanceof Error ? e.message : String(e), bytesBack: "", frames: [], waitedMs: 0 }));
+        return;
+      }
+
+      probeBytes.current.set(id, "");
+      const control = `PROBE${Date.now().toString(36).toUpperCase()}`;
+      const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      const message = probeMessage(control, stamp);
+      await invokeNative<number>("link_send", {
+        id,
+        data: `${MLLP_START}${textToWire(message, encoding)}${MLLP_END}`,
+      });
+
+      // Poll rather than race a timer: the answer usually arrives in a few
+      // milliseconds, and waiting the full window for a healthy receiver would
+      // make the tool feel broken.
+      const deadline = performance.now() + PROBE_WAIT_MS;
+      let frames: string[] = [];
+      let bytesBack = "";
+      while (performance.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        bytesBack = probeBytes.current.get(id) ?? "";
+        if (!bytesBack) continue;
+        frames = mllpFeed(mllpReader(), bytesBack).messages;
+        if (frames.length > 0) break;
+      }
+
+      setProbe(
+        interpretProbe({
+          connected: true,
+          bytesBack: wireToText(bytesBack, encoding),
+          frames: frames.map((f) => wireToText(f, encoding)),
+          waitedMs: Math.round(performance.now() - startedAt),
+        }),
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      if (id) {
+        probeBytes.current.delete(id);
+        await invokeNative<boolean>("link_close", { id }).catch(() => undefined);
+      }
+      setProbing(false);
+    }
+  };
+
   const listenTcp = async () => {
     try {
       const id = await invokeNative<string>("link_tcp_listen", { port: Number(listenPort) });
@@ -330,6 +412,7 @@ export function DeviceLink() {
           dataBits: Number(dataBits),
           parity,
           stopBits: Number(stopBits),
+          flowControl,
         },
       });
       astm.current.set(id, astmLink());
@@ -442,7 +525,40 @@ export function DeviceLink() {
                 <Input className="h-8 flex-1 text-xs" value={host} onChange={(e) => setHost(e.target.value)} placeholder="host" />
                 <Input className="h-8 w-20 text-xs" value={port} onChange={(e) => setPort(e.target.value)} placeholder="port" />
               </div>
-              <Button size="sm" className="w-full" onClick={connect} disabled={!native}><Plug /> Connect</Button>
+              <div className="flex gap-2">
+                <Button size="sm" className="flex-1" onClick={connect} disabled={!native}><Plug /> Connect</Button>
+                <Button size="sm" variant="outline" onClick={runProbe} disabled={!native || probing} title="Connect, send one framed message, and report what came back">
+                  <Stethoscope className={cn("size-3.5", probing && "animate-pulse")} /> {probing ? "Probing…" : "Probe"}
+                </Button>
+              </div>
+
+              {probe && (
+                <div
+                  className={cn(
+                    "rounded-md border p-2 text-[11px]",
+                    probe.verdict === "healthy" || probe.verdict === "rejected"
+                      ? "border-success/40 bg-success/5"
+                      : "border-destructive/40 bg-destructive/5",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Badge variant={probe.verdict === "healthy" || probe.verdict === "rejected" ? "success" : "destructive"} className="text-[9px]">
+                      {probe.verdict}
+                    </Badge>
+                    {probe.ackCode && <Badge variant="outline" className="text-[9px]">MSA-1 {probe.ackCode}</Badge>}
+                    <CopyButton className="ml-auto" value={probeSummary(probe)} />
+                  </div>
+                  <p className="mt-1">{probe.message}</p>
+                  <p className="mt-1 text-muted-foreground">{probe.nextStep}</p>
+                </div>
+              )}
+
+              <p className="text-[10px] text-muted-foreground">
+                A probe sends a real <span className="mono">QRY^A19</span> to a real interface and closes again. A query
+                reads rather than writes, but what the receiver does with it is the receiver's business — do not point
+                this at production without knowing. An <span className="mono">AE</span> or <span className="mono">AR</span>{" "}
+                counts as a pass: it means the link is alive and the receiver disagreed with the content.
+              </p>
               <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 Encoding
                 <select
@@ -525,6 +641,23 @@ export function DeviceLink() {
               <Button size="sm" className="w-full" onClick={openSerial} disabled={!native || !serialPath}><PlugZap /> Open port</Button>
               <p className="text-[11px] text-muted-foreground">
                 7 data bits with even parity is still common on lab analysers; 8-N-1 is the usual default everywhere else.
+              </p>
+              <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                Flow control
+                <select
+                  aria-label="Flow control"
+                  className="h-7 flex-1 rounded-md border border-input bg-transparent px-1 text-xs"
+                  value={flowControl}
+                  onChange={(e) => setFlowControl(e.target.value)}
+                >
+                  <option value="none">none</option>
+                  <option value="hardware">hardware (RTS/CTS)</option>
+                  <option value="software">software (XON/XOFF)</option>
+                </select>
+              </label>
+              <p className="text-[10px] text-muted-foreground">
+                Most ASTM analysers use none. A few assert RTS/CTS and then never send a byte until it is honoured, which
+                looks exactly like a dead instrument.
               </p>
             </Panel>
           )}
