@@ -56,6 +56,20 @@ describe("format detection", () => {
     expect(looksLikeFhir('{"resource":"patient"}')).toBe(false);
   });
 
+  it("recognises a segment behind a log prefix, which is what a log line actually contains", () => {
+    const logged = "2026-08-17 10:30:00 ERROR parse failed: PID|1||100234^^^HOSP^MR||SHARMA^PRIYA^K||19750214|F";
+    expect(looksLikeHl7(logged)).toBe(true);
+    const found = detectInHl7(logged);
+    expect(found.some((f) => f.value === "SHARMA^PRIYA^K")).toBe(true);
+    // Offsets must still point at the real text, prefix and all.
+    for (const f of found) expect(logged.slice(f.start, f.end)).toBe(f.value);
+  });
+
+  it("does not read prose containing a bar as a segment", () => {
+    expect(looksLikeHl7("the PID|1 field was wrong")).toBe(false);
+    expect(looksLikeHl7("options: PID|MRN|DOB")).toBe(false);
+  });
+
   it("recognises a bare segment, which is what a log line actually contains", () => {
     // The commonest paste of all: the one segment that failed, with no MSH.
     expect(looksLikeHl7("PID|1||100234^^^HOSP^MR||SHARMA^PRIYA^K")).toBe(true);

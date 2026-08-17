@@ -176,15 +176,24 @@ export function detectInText(text: string, offset = 0): PhiFinding[] {
  * Does this look like HL7 v2?
  *
  * MSH is mandatory in a real message, but a real message is rarely what gets
- * pasted — a log line carrying the one segment that failed is, and a bare `PID|`
- * fragment is the commonest of all. Requiring MSH meant those fragments fell
- * through to the regex pass, where nothing recognises a surname. So any known
- * segment header at the start of a line counts.
+ * pasted. What gets pasted is a log line carrying the one segment that failed —
+ * and a logger puts its own timestamp and level in front of it, so the segment
+ * is neither first in the text nor first on its line:
+ *
+ *     2026-08-17 10:30:00 ERROR parse failed: PID|1||100234^^^HOSP^MR||SHARMA…
+ *
+ * Requiring MSH, or requiring the line to start with the segment, drops that
+ * case to the regex pass — where nothing recognises a surname. So a known
+ * segment name preceded by whitespace or a line start counts, provided the line
+ * has enough field separators to be a segment rather than prose.
  */
-const HL7_SEGMENT = /(^|[\r\n])(MSH|PID|PV1|PV2|OBR|OBX|ORC|NTE|NK1|IN1|IN2|GT1|DG1|AL1|SPM|EVN|MSA|ERR|QRD|ZDS)\|/;
+const SEGMENT_NAMES = "MSH|PID|PV1|PV2|OBR|OBX|ORC|NTE|NK1|IN1|IN2|GT1|DG1|AL1|SPM|EVN|MSA|ERR|QRD|ZDS";
+const SEGMENT_AT = new RegExp(`(?:^|\\s)(${SEGMENT_NAMES})\\|`);
+/** Below this many separators a line is prose that happens to contain a bar. */
+const MIN_FIELDS = 3;
 
 export function looksLikeHl7(text: string): boolean {
-  return HL7_SEGMENT.test(text.trim());
+  return text.split(/\r\n|\r|\n/).some((line) => SEGMENT_AT.test(line) && (line.match(/\|/g)?.length ?? 0) >= MIN_FIELDS);
 }
 
 /**
@@ -238,11 +247,14 @@ function parseHl7(text: string): Segment[] {
       cursor += line.length;
       continue;
     }
-    const name = line.slice(0, 3);
-    if (/^[A-Z][A-Z0-9]{2}$/.test(name) && line[3] === "|") {
+    // The segment may sit behind a log prefix, so find where it actually starts.
+    const at0 = SEGMENT_AT.exec(line);
+    if (at0) {
+      const nameStart = at0.index + at0[0].length - at0[1].length - 1;
+      const name = at0[1];
       const fields: Segment["fields"] = [];
-      let at = cursor + 3;
-      const parts = line.slice(3).split("|");
+      let at = cursor + nameStart + 3;
+      const parts = line.slice(nameStart + 3).split("|");
       // parts[0] is the empty string before the first separator.
       for (let i = 1; i < parts.length; i++) {
         const start = at + 1;
