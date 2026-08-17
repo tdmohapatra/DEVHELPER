@@ -40,6 +40,7 @@ import {
   FileBadge,
   Radar,
   RefreshCcw,
+  HeartHandshake,
   Antenna,
   Bug,
   FileSearch,
@@ -381,6 +382,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/retry-designer",
     component: L(() => import("./impl/RetryDesigner"), "RetryDesigner"),
+  },
+  {
+    id: "health-board",
+    name: "Integration Health Board",
+    description: "Watch endpoints — percentiles, not averages, and an error budget",
+    category: "diagnostics",
+    icon: HeartHandshake,
+    keywords: [
+      "health", "uptime", "monitor", "watch", "ping", "endpoint", "slo", "sla", "latency", "p95", "percentile",
+      "availability", "error budget", "probe", "heartbeat", "status",
+    ],
+    route: "/tools/health-board",
+    component: L(() => import("./impl/HealthBoard"), "HealthBoard"),
   },
   {
     id: "jwt-decoder",
