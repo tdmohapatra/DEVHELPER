@@ -42,6 +42,7 @@ import {
   RefreshCcw,
   HeartHandshake,
   ScanText,
+  Wand2,
   Antenna,
   Bug,
   FileSearch,
@@ -409,6 +410,19 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/code-review",
     component: L(() => import("./impl/CodeReviewAssistant"), "CodeReviewAssistant"),
+  },
+  {
+    id: "transform-playground",
+    name: "Transform Playground",
+    description: "Reshape a payload with a template that looks like the output",
+    category: "data",
+    icon: Wand2,
+    keywords: [
+      "transform", "template", "reshape", "map", "jsonpath", "json", "fhir", "bundle", "convert", "projection",
+      "flatten", "each", "pipeline", "xslt", "liquid",
+    ],
+    route: "/tools/transform-playground",
+    component: L(() => import("./impl/TransformPlayground"), "TransformPlayground"),
   },
   {
     id: "jwt-decoder",
