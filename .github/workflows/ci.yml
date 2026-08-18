@@ -1,12 +1,25 @@
 name: CI
 
 # Runs on every push and pull request. Deliberately does not build the Tauri
-# bundle: that needs the signing key, and a check that requires a secret cannot
-# run on a fork's pull request. Bundling is the release workflow's job.
+# bundle: that is minutes of work whose only new signal is packaging, and
+# packaging is the release workflow's job.
 on:
   push:
     branches: [main]
   pull_request:
+  # So a run can be retried without an empty commit.
+  workflow_dispatch:
+
+# Read-only: nothing here publishes, and a token that cannot write is one that
+# cannot be misused by a dependency running in a build script.
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run's answer worthless.
+# Cancelling it frees the runner instead of racing to tell you about old code.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   frontend:
@@ -26,6 +39,17 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # The runner is on UTC and a developer machine usually is not, which has
+      # already cost one green-locally-red-on-CI afternoon: an assertion compared
+      # against `getTimezoneOffset() * -60000`, which is `-0` in UTC, and `toBe`
+      # uses Object.is. This second pass catches the same class of bug pointing
+      # the other way — a test that only passes in UTC — in a repo full of
+      # astronomy and scheduling maths.
+      - name: Test in a non-UTC timezone
+        run: npm test
+        env:
+          TZ: Asia/Kolkata
 
       # Catches a broken import or a chunk that stopped splitting, neither of
       # which the typecheck or the tests would notice.
@@ -50,8 +74,13 @@ jobs:
       - name: Check
         run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
+      # Plain `cargo test` — not `--lib`. The integration tests in
+      # `src-tauri/tests/` were invisible to CI while `--lib` was used, and one of
+      # them is the guard on `capabilities/default.json`: a scope pattern without
+      # a port silently blocks every local server, which is exactly the bug that
+      # test exists to catch.
       - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

@@ -1,6 +1,6 @@
 name: Release
 
-# Tag-driven: pushing v* builds the installers and creates a draft release.
+# Tag-driven: pushing v* builds the installers and publishes the release.
 # Nothing publishes from a branch push, so an ordinary commit never produces a
 # release.
 on:
@@ -14,11 +14,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and release, e.g. v0.2.0"
+        description: "Existing tag to build and release, e.g. v0.2.3"
         required: true
 
 permissions:
   contents: write
+
+# Re-tagging — moving a tag that was pushed minutes ago, before anyone downloaded
+# it — starts a second run under the same name. Without this the two race to
+# upload the same asset names and one of them loses.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -35,6 +42,27 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref_name }}
+
+      # The three version strings and the tag all have to agree. They have
+      # disagreed: a tag pushed before a feature commit produced an installer
+      # without the feature, and the only symptom was a user saying the option was
+      # not there. Ten seconds here beats a wrong download.
+      - name: Check the tag matches the version in the tree
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $expected = $tag.TrimStart("v")
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $app = (Select-String -Path src/lib/workspace.ts -Pattern 'APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          "tag=$tag  package.json=$pkg  tauri.conf.json=$conf  APP_VERSION=$app"
+          $bad = @()
+          if ($pkg -ne $expected) { $bad += "package.json ($pkg)" }
+          if ($conf -ne $expected) { $bad += "tauri.conf.json ($conf)" }
+          if ($app -ne $expected) { $bad += "APP_VERSION ($app)" }
+          if ($bad.Count) {
+            throw "Tag $tag expects version $expected, but these disagree: $($bad -join ', '). Bump them, commit, then move the tag."
+          }
 
       - uses: actions/setup-node@v7
         with:
@@ -59,6 +87,48 @@ jobs:
       - name: Test
         run: npm test
 
+      # A tag build should be at least as strict as a branch build. The Rust side
+      # gets compiled by the bundler anyway, so running its tests first means a
+      # released binary has passed everything CI would have asked of it — including
+      # the integration test that guards the HTTP capability scope.
+      - name: Test the native side
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      # Release notes are this version's changelog section, not a pointer to the
+      # file. Someone reading the release page should not have to open another
+      # document to find out what changed.
+      - name: Collect the release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $version = $tag.TrimStart("v")
+          $lines = Get-Content CHANGELOG.md
+          $heading = ($lines | Select-String -Pattern ("^## \[" + [regex]::Escape($version) + "\]") | Select-Object -First 1)
+          if (-not $heading) {
+            $body = "No changelog section for $version."
+          } else {
+            $rest = $lines[($heading.LineNumber)..($lines.Count - 1)]
+            $next = ($rest | Select-String -Pattern "^## \[" | Select-Object -First 1)
+            $section = if ($next) { $rest[0..($next.LineNumber - 2)] } else { $rest }
+            $body = ($section -join "`n").Trim()
+          }
+          $downloads = @(
+            "",
+            "---",
+            "",
+            "**Which download?**",
+            ("- ``DevHelper-$tag-portable-x64.exe`` — the application itself. Save it anywhere and double-click; nothing is installed, and one file is the whole app."),
+            ("- ``DevHelper_${version}_x64-setup.exe`` — the usual installer: Start-menu entry and an uninstaller."),
+            ("- ``DevHelper_${version}_x64_en-US.msi`` — the same, for MSI deployment."),
+            "",
+            "All three need the Microsoft WebView2 runtime, which is already present on Windows 11 and on any up-to-date Windows 10. The exe is not code-signed, so SmartScreen asks once: More info -> Run anyway."
+          ) -join "`n"
+          # A multi-line step output needs a delimiter GitHub can find again.
+          "body<<RELEASE_NOTES_EOF" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          ($body + "`n" + $downloads) | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "RELEASE_NOTES_EOF" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       # No signing key: releases are plain installers and DevHelper does not
       # check for updates, so there is nothing to verify a signature against.
       - name: Build and publish
@@ -68,27 +138,21 @@ jobs:
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "DevHelper ${{ inputs.tag || github.ref_name }}"
-          releaseBody: |
-            See CHANGELOG.md for what changed.
-
-            **Which download?**
-            - `DevHelper_x.y.z_x64-setup.exe` — the usual installer: Start-menu entry, uninstaller.
-            - `DevHelper_x.y.z_x64_en-US.msi` — the same thing for anyone who deploys by MSI.
-            - `DevHelper-vx.y.z-portable-x64.exe` — the application itself. Save it anywhere and double-click; nothing is installed.
-
-            All three need the Microsoft WebView2 runtime, which is already present on Windows 11 and on any up-to-date Windows 10.
-          # Published as a draft so the artifacts can be checked before anyone is
-          # pointed at them.
-          releaseDraft: true
+          releaseBody: ${{ steps.notes.outputs.body }}
+          # Published outright. It used to be a draft so the artifacts could be
+          # eyeballed first, which in practice meant every release needed a manual
+          # API call to go live and a successful tag build sat invisible until
+          # someone remembered. The checks above are the gate now.
+          releaseDraft: false
           prerelease: false
 
       # A copy of the executable itself, next to the installers.
       #
       # Tauri only bundles installers, and "download, double-click, it runs" is a
-      # reasonable thing to want — for a machine you are trying DevHelper on, or one
-      # where you would rather not install anything. The exe carries its own
-      # frontend, so this is the whole application in one file; it needs the WebView2
-      # runtime, and nothing else.
+      # reasonable thing to want — for a machine you are trying DevHelper on, or
+      # one where you would rather not install anything. The exe carries its own
+      # frontend, so this is the whole application in one file; it needs the
+      # WebView2 runtime, and nothing else.
       - name: Attach a portable exe
         shell: pwsh
         env:
@@ -100,3 +164,19 @@ jobs:
           # --clobber so re-running a release for the same tag replaces the asset
           # rather than failing on a name that already exists.
           gh release upload $tag $portable --clobber --repo $env:GITHUB_REPOSITORY
+
+      # Says out loud what was produced, so a green tick is not the only evidence.
+      - name: Summarise the release
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
+          "## DevHelper $tag published" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $url | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Assets:" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          gh release view $tag --json assets --jq ".assets[] | \"- \(.name) (\(.size / 1048576 | floor) MB)\"" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
