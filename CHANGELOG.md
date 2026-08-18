@@ -5,6 +5,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-08-18
+
+### Added — AI inside Notes
+- **Seven AI actions in the note editor**, on the whole note or on just the passage
+  you have selected: **Summarise**, **Improve writing**, **Continue**, **Analyse**,
+  **Find tasks**, **Title & tags**, **Outline**.
+- **Nothing reaches the note until you press Apply.** Every result appears in a
+  review box that says in words what applying would do — "will be added under
+  Summary", "will replace the selection" — with Copy and Discard beside it. A
+  summary is worth reading and throwing away; a rewrite is a destructive edit to
+  something you typed, and the difference between a useful writing tool and an
+  infuriating one is whether it asks.
+- Summaries and task lists arrive under their own heading; *Continue* simply carries
+  the note on; *Analyse* is read-only and structurally cannot overwrite the note it
+  was asked about; *Title & tags* sets the fields and merges with the tags already
+  there rather than replacing them.
+- The prompts name task checkboxes, `[[wiki links]]`, `#tags`, tables and code
+  blocks as structures to preserve, because losing one to a rewrite would quietly
+  break the tags, backlinks and task rollups Notes derives from the text itself.
+- Like every other AI surface it goes through one code path, so PHI is redacted on
+  the way out and the panel shows what would be masked before anything is sent —
+  which matters most here, since a note is where an identifier or a connection
+  string actually gets pasted.
+
+
 ## [0.2.2] — 2026-08-18
 
 ### Added — AI that runs on your own machine
