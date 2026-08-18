@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./platform";
 import { executeRequest } from "./http";
 import { useAiStore } from "@/stores/useAiStore";
+import { modelDestination, type CatalogModel } from "@/tools/lib/modelCatalog";
 import {
   parseRelease,
   pickRuntimeAsset,
@@ -234,4 +235,45 @@ export async function installRuntime(choice: RuntimeChoice): Promise<string> {
 /** `<hub>/runtime` — the folder the discovery order looks in first. */
 export function runtimeDir(hubDir: string): string {
   return `${hubDir.replace(/[/\\]+$/, "")}/${RUNTIME_SUBDIR}`;
+}
+
+/** Make sure the hub folder exists. Quiet no-op when it already does. */
+export async function ensureHubDir(hubDir: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("llm_ensure_dir", { path: hubDir });
+}
+
+export interface DownloadProgress {
+  received: number;
+  total: number;
+  done: boolean;
+}
+
+/**
+ * Download a catalogue model into the hub folder.
+ *
+ * Progress arrives as Rust events rather than a return value, because the point
+ * of a two-gigabyte download is that the user can see it moving. The listener is
+ * attached before the download starts and detached whatever happens — a leaked
+ * listener would keep updating a progress bar that belongs to a screen the user
+ * has left.
+ */
+export async function downloadCatalogModel(
+  hubDir: string,
+  model: CatalogModel,
+  onProgress?: (p: DownloadProgress) => void,
+): Promise<string> {
+  requireTauri();
+  await ensureHubDir(hubDir);
+
+  const { listen } = await import("@tauri-apps/api/event");
+  const un = await listen<DownloadProgress>("llm://download", (e) => onProgress?.(e.payload));
+  try {
+    return await invoke<string>("llm_download_model", {
+      url: model.url,
+      dest: modelDestination(hubDir, model),
+    });
+  } finally {
+    un();
+  }
 }

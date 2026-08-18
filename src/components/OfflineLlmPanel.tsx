@@ -6,9 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { useAiStore } from "@/stores/useAiStore";
 import {
-  fetchRuntimeChoice, findRuntime, installRuntime, scanModels, serverStatus, startServer, stopServer,
-  type LlmStatus, type RuntimeChoice,
+  downloadCatalogModel, ensureHubDir, fetchRuntimeChoice, findRuntime, installRuntime, scanModels,
+  serverStatus, startServer, stopServer,
+  type DownloadProgress, type LlmStatus, type RuntimeChoice,
 } from "@/lib/localLlmClient";
+import {
+  describeCatalogModel, downloadLabel, downloadPercent, modelDestination, MODEL_CATALOG, suggestedModel,
+  type CatalogModel,
+} from "@/tools/lib/modelCatalog";
 import { describeAsset, FLAVOR_LABELS, type RuntimeFlavor } from "@/tools/lib/llamaRelease";
 import { formatModelSize, hubHint, offlineProblem, DEFAULT_HUB_DIR, type LocalModel } from "@/tools/lib/localLlm";
 import { isTauri } from "@/lib/platform";
@@ -34,6 +39,9 @@ export function OfflineLlmPanel() {
   // would download, showing the user that answer, and only then downloading.
   const [choice, setChoice] = useState<RuntimeChoice | null>(null);
   const [installing, setInstalling] = useState(false);
+  // Getting a model is the same shape as getting the engine: propose, confirm, do.
+  const [offer, setOffer] = useState<CatalogModel | null>(null);
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const alive = useRef(true);
 
   useEffect(() => () => { alive.current = false; }, []);
@@ -63,7 +71,10 @@ export function OfflineLlmPanel() {
   // Scan once on open, and re-sync with whatever server is already running —
   // Settings can be closed and reopened while a model stays loaded.
   useEffect(() => {
-    void refresh(true);
+    // On a new machine the folder does not exist yet, and a scan of a missing
+    // folder is an error rather than an empty list. Creating it first is what
+    // makes the default path work with nothing set up.
+    void ensureHubDir(ai.localHubDir).catch(() => {}).then(() => refresh(true));
     void serverStatus().then((s) => {
       if (!alive.current) return;
       setStatus(s);
@@ -189,6 +200,24 @@ export function OfflineLlmPanel() {
     }
   };
 
+  /** Fetch a model from the short list, with progress. */
+  const confirmDownload = async () => {
+    if (!offer) return;
+    setProgress({ received: 0, total: offer.size, done: false });
+    try {
+      await downloadCatalogModel(ai.localHubDir, offer, (p) => { if (alive.current) setProgress(p); });
+      if (!alive.current) return;
+      setOffer(null);
+      setProgress(null);
+      toast.success(`${offer.name} is in the folder. Select it and press Start.`);
+      await refresh(true);
+    } catch (e) {
+      if (!alive.current) return;
+      setProgress(null);
+      toast.error((e as Error).message);
+    }
+  };
+
   const stop = async () => {
     setBusy(true);
     try {
@@ -252,6 +281,44 @@ export function OfflineLlmPanel() {
         </div>
       )}
 
+      {offer && (
+        <div className="space-y-2 rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
+          <p className="font-medium">Download a chat model?</p>
+          <ul className="space-y-0.5 text-xs text-muted-foreground">
+            <li>Model: <span className="font-mono">{describeCatalogModel(offer)}</span></li>
+            <li>From: {offer.source}</li>
+            <li>Into: <span className="font-mono">{modelDestination(ai.localHubDir, offer)}</span></li>
+            <li>{offer.note}</li>
+          </ul>
+          {progress ? (
+            <div className="space-y-1">
+              {/* A two-gigabyte download with no feedback reads as a hang. */}
+              <div className="h-1.5 overflow-hidden rounded bg-muted">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{ width: `${downloadPercent(progress.received, progress.total) ?? 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {downloadLabel(progress.received, progress.total)}
+                {downloadPercent(progress.received, progress.total) !== null &&
+                  ` · ${downloadPercent(progress.received, progress.total)}%`}
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button size="sm" onClick={() => void confirmDownload()}>Download</Button>
+              <Button size="sm" variant="ghost" onClick={() => setOffer(null)}>Cancel</Button>
+              {MODEL_CATALOG.filter((m) => m.id !== offer.id).map((m) => (
+                <Button key={m.id} size="sm" variant="ghost" onClick={() => setOffer(m)}>
+                  {m.name} instead ({(m.size / 1024 ** 3).toFixed(1)} GB)
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="rounded-md border">
         <div className="flex items-center justify-between border-b px-3 py-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-2"><HardDrive className="size-3.5" /> {models.length} GGUF model{models.length === 1 ? "" : "s"}</span>
@@ -309,9 +376,16 @@ export function OfflineLlmPanel() {
         )}
       </div>
 
-      {hint && (
+      {hint && !offer && (
         <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
           {hint}{" "}
+          <button
+            type="button"
+            className="underline"
+            onClick={() => setOffer(suggestedModel(null))}
+          >
+            Let DevHelper download one
+          </button>{" "}
           {ai.localHubDir.replace(/[/\\]+$/, "") !== DEFAULT_HUB_DIR && (
             <button type="button" className="underline" onClick={() => ai.set({ localHubDir: DEFAULT_HUB_DIR })}>
               Use {DEFAULT_HUB_DIR}

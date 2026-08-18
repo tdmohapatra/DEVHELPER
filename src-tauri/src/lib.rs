@@ -138,6 +138,8 @@ pub fn run() {
             llm::llm_status,
             llm::llm_stop,
             llm::llm_install_runtime,
+            llm::llm_ensure_dir,
+            llm::llm_download_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevHelper");

@@ -22,7 +22,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 /// How many lines of the server's own output to keep.
 ///
@@ -56,6 +56,9 @@ struct Running {
     log: Arc<Mutex<VecDeque<String>>>,
     /// How the process ended, once it has. Latched: the first exit wins.
     exit: Arc<Mutex<Option<String>>>,
+    /// Dropping this asks Windows to kill the child, whatever happened to us.
+    #[cfg(windows)]
+    _job: Option<JobHandle>,
 }
 
 impl Running {
@@ -88,6 +91,73 @@ impl Drop for LlmState {
         self.stop();
     }
 }
+
+/// Put the child in a job object that dies with this process.
+///
+/// `on_window_event` in `lib.rs` handles the ordinary shutdown and `Drop` covers
+/// a panic, but neither runs when DevHelper is force-killed — Task Manager,
+/// `taskkill /F`, a debugger detaching — and a leaked llama-server then holds
+/// several gigabytes with no window to close. Found exactly that way: an orphan
+/// on port 65248 still resident after its parent had been killed.
+///
+/// A job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` moves the guarantee
+/// into the kernel: when the last handle to the job closes, which happens however
+/// this process ends, Windows terminates everything in it.
+#[cfg(windows)]
+fn confine_to_job(child: &Child) -> Result<JobHandle, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // SAFETY: every call below is a documented Win32 entry point given a handle
+    // this function owns, or a zeroed struct of the size the API is told.
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err("Cannot create a job object for the model server".into());
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            return Err("Cannot configure the job object for the model server".into());
+        }
+        if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+            return Err("Cannot put the model server in its job object".into());
+        }
+        Ok(JobHandle(job as isize))
+    }
+}
+
+/// Owns the job handle for as long as the server is meant to run.
+#[cfg(windows)]
+pub struct JobHandle(isize);
+
+#[cfg(windows)]
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        // Closing the last handle is what triggers the kill, so this is both the
+        // cleanup and the mechanism.
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0 as _);
+        }
+    }
+}
+
+#[cfg(windows)]
+// The handle is only ever created, stored and closed; nothing reads across
+// threads, and Windows handles are process-wide.
+unsafe impl Send for JobHandle {}
 
 fn push_log(log: &Arc<Mutex<VecDeque<String>>>, line: String) {
     if let Ok(mut l) = log.lock() {
@@ -263,6 +333,18 @@ pub fn llm_start(
 
     push_log(&log, format!("$ {runtime} {}", args.join(" ")));
 
+    // Best effort: if the job object cannot be created the server still runs, and
+    // the ordinary shutdown paths still stop it. Saying so in the log beats
+    // refusing to start over a cleanup guarantee.
+    #[cfg(windows)]
+    let job = match confine_to_job(&child) {
+        Ok(j) => Some(j),
+        Err(e) => {
+            push_log(&log, format!("warning: {e}; it will still be stopped on exit"));
+            None
+        }
+    };
+
     let mut running = Running {
         child,
         port,
@@ -270,6 +352,8 @@ pub fn llm_start(
         runtime,
         log,
         exit,
+        #[cfg(windows)]
+        _job: job,
     };
     let status = status_of(&mut running);
     *state.inner.lock().map_err(|_| "LLM state is poisoned")? = Some(running);
@@ -452,5 +536,142 @@ mod tests {
     fn a_host_with_a_port_or_credentials_does_not_slip_through() {
         assert!(check_url("https://github.com:443/ggml-org/llama.cpp/x.zip").is_ok());
         assert!(check_url("https://github.com.evil.net/ggml-org/llama.cpp/x.zip").is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Downloading a model
+// ---------------------------------------------------------------------------
+
+/// Hosts a model download may come from.
+///
+/// Separate from the runtime's allow-list because the two are different risks: a
+/// runtime is an executable this app then runs, a model is data it feeds to one.
+/// Hugging Face redirects release files to a CDN host, so the CDN is named too.
+const MODEL_HOSTS: &[&str] = &[
+    "huggingface.co",
+    "cdn-lfs.huggingface.co",
+    "cdn-lfs-us-1.huggingface.co",
+    "cdn-lfs-eu-1.huggingface.co",
+    "transfer.xethub.hf.co",
+    "cas-bridge.xethub.hf.co",
+];
+
+/// Event carrying download progress to the UI.
+pub const DOWNLOAD_EVENT: &str = "llm://download";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DownloadProgress {
+    /// Bytes written so far.
+    received: u64,
+    /// Total bytes, when the server said. Zero when it did not.
+    total: u64,
+    done: bool,
+}
+
+fn check_model_url(url: &str) -> Result<(), String> {
+    let host = host_of(url).ok_or_else(|| format!("Not an https URL: {url}"))?;
+    let ok = MODEL_HOSTS.contains(&host.as_str())
+        // Hugging Face's CDN hostnames are generated, so the suffix is what can
+        // be checked. A suffix match is only safe with the leading dot.
+        || host.ends_with(".hf.co")
+        || host.ends_with(".huggingface.co");
+    if !ok {
+        return Err(format!("Refusing to download a model from {host}"));
+    }
+    Ok(())
+}
+
+/// Create a folder if it is not there. Used for the model hub on a new machine.
+#[tauri::command]
+pub fn llm_ensure_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| format!("Cannot create {path}: {e}"))
+}
+
+/// Download a model file, reporting progress as it goes.
+///
+/// Written to a `.part` file and renamed at the end, so an interrupted download
+/// never leaves something that looks like a usable model in the hub folder — the
+/// scanner would list it, the user would pick it, and llama.cpp would fail on a
+/// truncated file.
+#[tauri::command]
+pub async fn llm_download_model(
+    app: AppHandle,
+    url: String,
+    dest: String,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    check_model_url(&url)?;
+    let final_path = PathBuf::from(&dest);
+    if final_path.exists() {
+        return Err(format!("{dest} already exists"));
+    }
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+    }
+    let part_path = final_path.with_extension("part");
+
+    let res = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Download failed: {e}"))?;
+    let total = res.content_length().unwrap_or(0);
+
+    let mut file = std::fs::File::create(&part_path)
+        .map_err(|e| format!("Cannot write {}: {e}", part_path.display()))?;
+    let mut stream = res.bytes_stream();
+    let mut received: u64 = 0;
+    // Emitting on every chunk would be thousands of events for a 2GB file, which
+    // costs more than the progress bar is worth. Every 8MB is roughly a percent.
+    let mut next_report: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download interrupted after {received} bytes: {e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Cannot write {}: {e}", part_path.display()))?;
+        received += chunk.len() as u64;
+        if received >= next_report {
+            next_report = received + 8 * 1024 * 1024;
+            let _ = app.emit(DOWNLOAD_EVENT, DownloadProgress { received, total, done: false });
+        }
+    }
+    file.flush().map_err(|e| format!("Cannot finish {}: {e}", part_path.display()))?;
+    drop(file);
+
+    // A server that closed early leaves a short file that would still load as a
+    // "model" and fail cryptically. Better to fail here, naming both numbers.
+    if total > 0 && received != total {
+        let _ = std::fs::remove_file(&part_path);
+        return Err(format!("Download ended early: {received} of {total} bytes"));
+    }
+
+    std::fs::rename(&part_path, &final_path)
+        .map_err(|e| format!("Cannot move the finished download into place: {e}"))?;
+    let _ = app.emit(DOWNLOAD_EVENT, DownloadProgress { received, total, done: true });
+    Ok(final_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod model_url_tests {
+    use super::*;
+
+    #[test]
+    fn hugging_face_and_its_cdn_are_allowed() {
+        assert!(check_model_url("https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/x.gguf").is_ok());
+        assert!(check_model_url("https://cdn-lfs-us-1.huggingface.co/repos/ab/cd/x.gguf").is_ok());
+        assert!(check_model_url("https://transfer.xethub.hf.co/xorbs/default/x").is_ok());
+    }
+
+    #[test]
+    fn nothing_else_is() {
+        assert!(check_model_url("https://evil.example.com/x.gguf").is_err());
+        assert!(check_model_url("http://huggingface.co/x.gguf").is_err());
+        // The suffix check must not accept a host that merely ends with the text.
+        assert!(check_model_url("https://huggingface.co.evil.net/x.gguf").is_err());
+        assert!(check_model_url("https://nothf.co/x.gguf").is_err());
     }
 }
