@@ -20,6 +20,20 @@ import { Button } from "@/components/ui/button";
  * Tiles, routing and geocoding are network calls to OSM/CARTO/OSRM/Nominatim —
  * the map needs internet the first time an area is viewed, and the CSP in
  * tauri.conf.json has to keep allowing them.
+ *
+ * That CSP also needs `dangerousDisableAssetCspModification: ["style-src"]`, and
+ * this is the note explaining why, because the failure it prevents is invisible
+ * in `tauri dev` (Vite serves the frontend, so no CSP is enforced) and looks like
+ * a broken feature in the packaged build.
+ *
+ * Tauri injects a nonce into every CSP directive it controls. Per the CSP spec a
+ * nonce DISABLES `'unsafe-inline'` in the same directive — so `style-src 'self'
+ * 'unsafe-inline'` silently became `style-src 'self' 'nonce-…'`, the gadget's
+ * runtime `<style>` block was refused, and its ~200 inline `style` attributes
+ * never applied. The map still drew (Leaflet positions panes through the CSSOM,
+ * which CSP does not police) while every Map Lab panel rendered its DOM with no
+ * CSS at all — 310 nodes, invisible. Exempting only `style-src` restores it;
+ * `script-src` keeps its nonces, so nothing about script execution is relaxed.
  */
 const SRC = "/gadgets/star-map.html";
 
