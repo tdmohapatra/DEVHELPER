@@ -85,13 +85,24 @@ export async function stopServer(): Promise<void> {
   useAiStore.getState().set({ localRunning: false, localPort: 0 });
 }
 
-/** One health probe. `true` only for a 200 — llama.cpp returns 503 while loading. */
-async function healthy(port: number): Promise<boolean> {
+/**
+ * One health probe. Ready only on a 200 — llama.cpp answers 503 while loading.
+ *
+ * The reason comes back with it rather than being swallowed. The first version
+ * returned a bare `false` for every outcome, and when the probe itself was being
+ * refused — the HTTP scope in `capabilities/default.json` allowed `http://**`,
+ * which matches only the protocol's default port, so nothing on a real port ever
+ * got through — the panel showed "loading" until the timeout while the server sat
+ * there answering curl. An error that cannot be seen costs a build to find.
+ */
+async function probe(port: number): Promise<{ ready: boolean; error?: string }> {
   try {
     const res = await executeRequest({ method: "GET", url: localHealthUrl(port), headers: {}, body: undefined });
-    return res.status === 200;
-  } catch {
-    return false;
+    if (res.status === 200) return { ready: true };
+    // 503 is the model still loading, and is not worth reporting as a problem.
+    return { ready: false, error: res.status === 503 ? undefined : `health check answered ${res.status}` };
+  } catch (e) {
+    return { ready: false, error: `health check failed: ${(e as Error).message}` };
   }
 }
 
@@ -139,8 +150,11 @@ export async function startServer(o: StartOptions): Promise<number> {
   o.onProgress?.(status);
 
   const deadline = Date.now() + (o.timeoutMs ?? 300_000);
+  let lastProbeError: string | undefined;
   while (Date.now() < deadline) {
-    if (await healthy(port)) {
+    const health = await probe(port);
+    lastProbeError = health.error ?? lastProbeError;
+    if (health.ready) {
       useAiStore.getState().set({
         localPort: port,
         localRunning: true,
@@ -150,7 +164,7 @@ export async function startServer(o: StartOptions): Promise<number> {
       return port;
     }
     status = await serverStatus();
-    o.onProgress?.(status);
+    o.onProgress?.(health.error ? { ...status, log: [...status.log, health.error] } : status);
     if (!status.running) {
       // The child is gone. Its last lines say why; a bare "exited with code 1"
       // helps nobody.
@@ -161,7 +175,11 @@ export async function startServer(o: StartOptions): Promise<number> {
   }
 
   await stopServer();
-  throw new LocalLlmError("The model did not finish loading in time. Try a smaller quant, or raise the timeout.");
+  throw new LocalLlmError(
+    lastProbeError
+      ? `The server started but DevHelper could not talk to it: ${lastProbeError}`
+      : "The model did not finish loading in time. Try a smaller quant, or raise the timeout.",
+  );
 }
 
 /**

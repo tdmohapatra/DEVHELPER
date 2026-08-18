@@ -11,6 +11,7 @@ import {
 } from "@/lib/localLlmClient";
 import { describeAsset, FLAVOR_LABELS, type RuntimeFlavor } from "@/tools/lib/llamaRelease";
 import { formatModelSize, hubHint, offlineProblem, DEFAULT_HUB_DIR, type LocalModel } from "@/tools/lib/localLlm";
+import { isTauri } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,21 +80,44 @@ export function OfflineLlmPanel() {
    * copy — so the interesting moment is when the user comes back to the window.
    * Rescanning then is why a model that was just saved appears without anyone
    * having to know that a Scan button exists.
+   *
+   * The DOM `focus` event is not enough and was tried first: activating the
+   * native window does not move focus inside the document, so WebView2 never
+   * fires it and a freshly downloaded model stayed invisible until Scan was
+   * pressed. Tauri's own window event is the one that corresponds to "the user
+   * came back". The DOM listener stays for browser dev mode, where it is the
+   * only one there is.
    */
   useEffect(() => {
     const onFocus = () => void refresh(true);
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+
+    let un: (() => void) | undefined;
+    if (isTauri()) {
+      void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
+        getCurrentWindow()
+          .onFocusChanged(({ payload: focused }) => {
+            if (focused) void refresh(true);
+          })
+          .then((f) => { un = f; }),
+      );
+    }
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      un?.();
+    };
   }, [refresh]);
 
   const selected = models.find((m) => m.path === ai.localModelPath) ?? null;
-  const hint = hubHint(models, ai.localHubDir);
+  /** What is wrong with the pick. */
   const problem = offlineProblem({
     hubDir: ai.localHubDir,
     runtimePath: runtime,
     modelPath: ai.localModelPath,
     models,
   });
+  /** What is wrong with the folder — a different question, see localLlm.ts. */
+  const hint = hubHint(models, ai.localHubDir);
 
   const start = async () => {
     if (!selected) return;
