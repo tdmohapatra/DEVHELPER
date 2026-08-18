@@ -190,6 +190,43 @@ export function describeModel(m: LocalModel): string {
     .join(" · ");
 }
 
+/**
+ * Filenames that would actually work, for the empty-folder hint.
+ *
+ * Naming real files rather than saying "an instruct model" is the difference
+ * between a hint and a riddle: the first hub this shipped against ended up with
+ * three embedding models in it, because "a GGUF model" and "a model that can
+ * hold a conversation" are not the same requirement and nothing said so.
+ */
+export const SUGGESTED_CHAT_MODELS = [
+  "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+  "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+  "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+];
+
+/**
+ * What is wrong with the contents of the hub folder, or null when it holds
+ * something usable.
+ *
+ * Deliberately about the folder rather than the selection: `offlineProblem`
+ * answers "can I start what is picked", this answers "is there anything worth
+ * picking", and the second question is the one a new user is actually stuck on.
+ */
+export function hubHint(models: LocalModel[], hubDir: string): string | null {
+  const dir = hubDir.replace(/[/\\]+$/, "");
+  if (models.length === 0) {
+    return `No .gguf files in ${dir}. Put a chat model there — e.g. ${SUGGESTED_CHAT_MODELS[0]} — and it will appear here.`;
+  }
+  const chat = models.filter((m) => m.kind === "chat" && !m.problem);
+  if (chat.length === 0) {
+    const embeds = models.filter((m) => m.kind === "embedding").length;
+    return embeds === models.length
+      ? `${dir} holds ${embeds} embedding model${embeds === 1 ? "" : "s"} and no chat model. Embedding models make vectors, not answers — add e.g. ${SUGGESTED_CHAT_MODELS[0]} to the same folder.`
+      : `Nothing in ${dir} can chat yet. Add an instruct or chat model, e.g. ${SUGGESTED_CHAT_MODELS[0]}.`;
+  }
+  return null;
+}
+
 export interface ServerOptions {
   modelPath: string;
   port: number;

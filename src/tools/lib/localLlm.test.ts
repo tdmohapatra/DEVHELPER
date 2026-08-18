@@ -7,6 +7,7 @@ import {
   localHealthUrl,
   localModelAlias,
   guessModelKind,
+  hubHint,
   modelsFromScan,
   offlineProblem,
   parseModelName,
@@ -191,6 +192,38 @@ describe("describeModel", () => {
 
   it("omits an unknown quant and mentions shards", () => {
     expect(describeModel({ ...base, quant: null, shards: 3 })).toBe("Llama-3.1-8B · 4.6 GB · 3 shards");
+  });
+});
+
+describe("hubHint", () => {
+  const model = (name: string, kind: "chat" | "embedding", problem: string | null = null): LocalModel => ({
+    path: `C:/hub/${name}`, file: name, name, quant: null, params: null,
+    kind, size: 1, shards: 1, problem,
+  });
+
+  it("names the folder and a real filename when the folder is empty", () => {
+    const hint = hubHint([], "C:/TDM/TDM_OFFLINE_LLMHUB/");
+    expect(hint).toContain("C:/TDM/TDM_OFFLINE_LLMHUB");
+    expect(hint).toContain("Instruct");
+    // No trailing slash duplicated into the message.
+    expect(hint).not.toContain("LLMHUB/.");
+  });
+
+  it("says so when the folder holds only embedding models", () => {
+    // The state a real hub folder was in: three embedding models, nothing that
+    // could answer a question.
+    const hint = hubHint([model("bge-m3.gguf", "embedding"), model("nomic-embed.gguf", "embedding")], "C:/hub");
+    expect(hint).toContain("2 embedding models and no chat model");
+    expect(hint).toContain("vectors, not answers");
+  });
+
+  it("is silent once one chat model is present", () => {
+    expect(hubHint([model("qwen-instruct.gguf", "chat")], "C:/hub")).toBeNull();
+  });
+
+  it("still prompts when the only chat model is an incomplete download", () => {
+    const broken = model("big.gguf", "chat", "2 of 3 shards present");
+    expect(hubHint([broken], "C:/hub")).toContain("Add an instruct or chat model");
   });
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, HardDrive, Play, RefreshCw, Square } from "lucide-react";
+import { Download, FolderOpen, HardDrive, Play, RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import {
   type LlmStatus, type RuntimeChoice,
 } from "@/lib/localLlmClient";
 import { describeAsset, FLAVOR_LABELS, type RuntimeFlavor } from "@/tools/lib/llamaRelease";
-import { formatModelSize, offlineProblem, type LocalModel } from "@/tools/lib/localLlm";
+import { formatModelSize, hubHint, offlineProblem, DEFAULT_HUB_DIR, type LocalModel } from "@/tools/lib/localLlm";
 import { cn } from "@/lib/utils";
 
 /**
@@ -74,7 +74,20 @@ export function OfflineLlmPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /*
+   * The folder is filled in from outside DevHelper — a browser download, a file
+   * copy — so the interesting moment is when the user comes back to the window.
+   * Rescanning then is why a model that was just saved appears without anyone
+   * having to know that a Scan button exists.
+   */
+  useEffect(() => {
+    const onFocus = () => void refresh(true);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
   const selected = models.find((m) => m.path === ai.localModelPath) ?? null;
+  const hint = hubHint(models, ai.localHubDir);
   const problem = offlineProblem({
     hubDir: ai.localHubDir,
     runtimePath: runtime,
@@ -107,6 +120,17 @@ export function OfflineLlmPanel() {
       toast.error(err.message);
     } finally {
       if (alive.current) setBusy(false);
+    }
+  };
+
+  const openHubFolder = async () => {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      // Reveal wants something that exists. The folder itself does once it has
+      // been scanned; a trailing separator makes Explorer open the parent.
+      await revealItemInDir(ai.localHubDir.replace(/[/\\]+$/, ""));
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   };
 
@@ -165,6 +189,9 @@ export function OfflineLlmPanel() {
             <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={scanning}>
               <RefreshCw className={cn("size-4", scanning && "animate-spin")} /> Scan
             </Button>
+            <Button size="sm" variant="outline" onClick={() => void openHubFolder()} title="Open this folder in Explorer">
+              <FolderOpen className="size-4" /> Open
+            </Button>
           </div>
         </Labeled>
       </div>
@@ -217,8 +244,8 @@ export function OfflineLlmPanel() {
         </div>
         {models.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No models under {ai.localHubDir}. Put an instruct/chat .gguf file there and press Scan —
-            that is the only piece DevHelper cannot fetch for you.
+            Watching {ai.localHubDir}. Drop a chat .gguf in there — the list refreshes when you come
+            back to this window. Models are the only piece DevHelper cannot fetch for you.
           </p>
         ) : (
           <ul className="max-h-56 overflow-y-auto">
@@ -257,6 +284,17 @@ export function OfflineLlmPanel() {
           </ul>
         )}
       </div>
+
+      {hint && (
+        <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+          {hint}{" "}
+          {ai.localHubDir.replace(/[/\\]+$/, "") !== DEFAULT_HUB_DIR && (
+            <button type="button" className="underline" onClick={() => ai.set({ localHubDir: DEFAULT_HUB_DIR })}>
+              Use {DEFAULT_HUB_DIR}
+            </button>
+          )}
+        </p>
+      )}
 
       <div className="grid grid-cols-3 gap-2">
         <Labeled label="Context">
