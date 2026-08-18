@@ -124,10 +124,16 @@ jobs:
             "",
             "All three need the Microsoft WebView2 runtime, which is already present on Windows 11 and on any up-to-date Windows 10. The exe is not code-signed, so SmartScreen asks once: More info -> Run anyway."
           ) -join "`n"
+          $notes = $body + "`n" + $downloads
           # A multi-line step output needs a delimiter GitHub can find again.
           "body<<RELEASE_NOTES_EOF" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          ($body + "`n" + $downloads) | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $notes | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "RELEASE_NOTES_EOF" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # Also on disk: `tauri-action` only sets the body when it *creates* the
+          # release, so re-releasing a tag left the previous notes in place — the
+          # v0.2.3 page kept a body still saying "x.y.z" after a successful
+          # re-release. The file lets a later step set it unconditionally.
+          $notes | Out-File "release-notes.md" -Encoding utf8
 
       # No signing key: releases are plain installers and DevHelper does not
       # check for updates, so there is nothing to verify a signature against.
@@ -165,6 +171,16 @@ jobs:
           # rather than failing on a name that already exists.
           gh release upload $tag $portable --clobber --repo $env:GITHUB_REPOSITORY
 
+      # Set the notes explicitly. Idempotent, and the only way a re-release gets
+      # the current changelog rather than whatever the first attempt wrote.
+      - name: Set the release notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          gh release edit $tag --notes-file release-notes.md --repo $env:GITHUB_REPOSITORY
+
       # Says out loud what was produced, so a green tick is not the only evidence.
       - name: Summarise the release
         shell: pwsh
@@ -176,7 +192,12 @@ jobs:
           $url | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "Assets:" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          gh release view $tag --json assets --jq ".assets[] | \"- \(.name) (\(.size / 1048576 | floor) MB)\"" |
-            Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          # ConvertFrom-Json rather than `gh --jq`: a jq expression needs embedded
+          # double quotes, PowerShell does not escape those with backslashes, and
+          # the malformed filter failed the whole job *after* a successful publish.
+          $release = gh release view $tag --json assets --repo $env:GITHUB_REPOSITORY | ConvertFrom-Json
+          foreach ($a in $release.assets) {
+            ("- {0} ({1:N1} MB)" -f $a.name, ($a.size / 1MB)) | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
