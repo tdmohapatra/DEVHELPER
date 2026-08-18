@@ -275,6 +275,6 @@ export function offlineProblem(state: {
   // every AI tool would fail on its first prompt, which is a worse outcome than
   // saying so here.
   if (picked.kind === "embedding") return `${picked.name} is an embedding model — it makes vectors, not answers. Pick an instruct or chat model.`;
-  if (!state.runtimePath) return "llama-server.exe was not found. Put llama.cpp's Windows build in the runtime folder, or set the path.";
+  if (!state.runtimePath) return "The llama.cpp engine is not installed yet — press Set up engine.";
   return null;
 }

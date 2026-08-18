@@ -29,6 +29,12 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "sync-s
 # The NATS client protocol (port 4222), so the tool can publish and subscribe
 # rather than only read the monitoring endpoints.
 async-nats = "0.38"
+# Downloading the llama.cpp runtime on request. reqwest is already in the tree
+# via tauri-plugin-http; taken directly here because the download writes to disk
+# and verifies a hash, neither of which belongs in the webview.
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.32"

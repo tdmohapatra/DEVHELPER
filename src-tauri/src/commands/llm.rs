@@ -295,3 +295,162 @@ pub fn llm_stop(state: State<'_, LlmState>) -> LlmStatus {
     state.stop();
     LlmStatus::default()
 }
+
+// ---------------------------------------------------------------------------
+// Installing the runtime
+// ---------------------------------------------------------------------------
+
+/// Hosts a runtime download may come from.
+///
+/// The app downloads an executable and then runs it, so the URL is not a
+/// parameter to be trusted because the frontend produced it. The frontend picks
+/// the release asset; this decides whether the result is allowed to exist. Both
+/// checks are cheap and the one that matters is this one.
+const ALLOWED_HOSTS: &[&str] = &["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+/// The only project whose builds we will install.
+const ALLOWED_PATH: &str = "ggml-org/llama.cpp";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallReport {
+    /// Full path of the llama-server executable that was installed.
+    pub runtime: String,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let host = rest.split('/').next()?;
+    Some(host.split(':').next()?.to_ascii_lowercase())
+}
+
+fn check_url(url: &str) -> Result<(), String> {
+    let host = host_of(url).ok_or_else(|| format!("Not an https URL: {url}"))?;
+    if !ALLOWED_HOSTS.contains(&host.as_str()) {
+        return Err(format!("Refusing to download a runtime from {host}"));
+    }
+    // The redirect target for a release asset does not repeat the repo path, so
+    // this only applies to the URL the caller started with.
+    if host == "github.com" && !url.contains(ALLOWED_PATH) {
+        return Err("Refusing to download a runtime from another project".into());
+    }
+    Ok(())
+}
+
+/// Download and unpack a llama.cpp Windows build into `dest`.
+///
+/// `expected_sha256` is verified when the release metadata supplied one. A
+/// mismatch aborts before anything is written, because the point of the check is
+/// that a corrupted or substituted archive never reaches the disk, let alone
+/// gets executed.
+#[tauri::command]
+pub async fn llm_install_runtime(
+    url: String,
+    dest: String,
+    expected_sha256: Option<String>,
+) -> Result<InstallReport, String> {
+    check_url(&url)?;
+
+    let bytes = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Download failed: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    if let Some(want) = expected_sha256 {
+        use sha2::{Digest, Sha256};
+        let got = format!("{:x}", Sha256::digest(&bytes));
+        let want = want.trim().trim_start_matches("sha256:").to_ascii_lowercase();
+        if got != want {
+            return Err(format!("The download does not match its published checksum (expected {want}, got {got})"));
+        }
+    }
+
+    let total = bytes.len() as u64;
+    let dest_dir = PathBuf::from(&dest);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("Cannot create {dest}: {e}"))?;
+
+    let reader = std::io::Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("Not a readable zip: {e}"))?;
+
+    let mut files = 0usize;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("Cannot read entry {i}: {e}"))?;
+        // `enclosed_name` returns None for anything that would escape the target
+        // directory — `..`, an absolute path, a Windows drive letter. A zip that
+        // tries is not one to unpack halfway.
+        let Some(rel) = entry.enclosed_name() else {
+            return Err(format!("The archive contains an unsafe path: {}", entry.name()));
+        };
+        let out = dest_dir.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| format!("Cannot create {}: {e}", out.display()))?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+        }
+        let mut sink = std::fs::File::create(&out).map_err(|e| format!("Cannot write {}: {e}", out.display()))?;
+        std::io::copy(&mut entry, &mut sink).map_err(|e| format!("Cannot write {}: {e}", out.display()))?;
+        files += 1;
+    }
+
+    // The build lays its files out however it likes; what matters is where the
+    // server ended up, and that is what the UI needs to show and to run.
+    let runtime = find_server(&dest_dir)
+        .ok_or_else(|| format!("The archive unpacked, but no llama-server executable was found under {dest}"))?;
+
+    Ok(InstallReport { runtime: runtime.to_string_lossy().to_string(), files, bytes: total })
+}
+
+/// Look for llama-server up to two levels down — some builds nest a folder.
+fn find_server(dir: &Path) -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(windows) { &["llama-server.exe"] } else { &["llama-server"] };
+    for n in names {
+        let direct = dir.join(n);
+        if direct.is_file() {
+            return Some(direct);
+        }
+    }
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            for n in names {
+                let nested = path.join(n);
+                if nested.is_file() {
+                    return Some(nested);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_github_hosts_are_allowed() {
+        assert!(check_url("https://github.com/ggml-org/llama.cpp/releases/download/b1/x.zip").is_ok());
+        assert!(check_url("https://objects.githubusercontent.com/whatever.zip").is_ok());
+        assert!(check_url("https://evil.example.com/ggml-org/llama.cpp/x.zip").is_err());
+        // http, not https: the executable would be substitutable in transit.
+        assert!(check_url("http://github.com/ggml-org/llama.cpp/x.zip").is_err());
+    }
+
+    #[test]
+    fn another_project_on_github_is_still_refused() {
+        assert!(check_url("https://github.com/someone/else/releases/download/v1/x.zip").is_err());
+    }
+
+    #[test]
+    fn a_host_with_a_port_or_credentials_does_not_slip_through() {
+        assert!(check_url("https://github.com:443/ggml-org/llama.cpp/x.zip").is_ok());
+        assert!(check_url("https://github.com.evil.net/ggml-org/llama.cpp/x.zip").is_err());
+    }
+}

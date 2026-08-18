@@ -15,6 +15,14 @@ import { isTauri } from "./platform";
 import { executeRequest } from "./http";
 import { useAiStore } from "@/stores/useAiStore";
 import {
+  parseRelease,
+  pickRuntimeAsset,
+  RUNTIME_RELEASE_API,
+  type ReleaseAsset,
+  type RuntimeFlavor,
+} from "@/tools/lib/llamaRelease";
+import {
+  RUNTIME_SUBDIR,
   localHealthUrl,
   localModelAlias,
   modelsFromScan,
@@ -154,4 +162,58 @@ export async function startServer(o: StartOptions): Promise<number> {
 
   await stopServer();
   throw new LocalLlmError("The model did not finish loading in time. Try a smaller quant, or raise the timeout.");
+}
+
+/**
+ * Install the llama.cpp runtime into the hub's `runtime` folder.
+ *
+ * Two steps, deliberately separate: `fetchRuntimeChoice` asks GitHub what the
+ * latest release contains and returns the exact file it would download, so the
+ * UI can show the user what they are agreeing to; `installRuntime` is what runs
+ * after they agree. Nothing is downloaded by the first step.
+ */
+export interface RuntimeChoice {
+  tag: string;
+  flavor: RuntimeFlavor;
+  asset: ReleaseAsset;
+  /** Where it will be unpacked. */
+  dest: string;
+}
+
+export async function fetchRuntimeChoice(hubDir: string, flavor?: RuntimeFlavor): Promise<RuntimeChoice> {
+  requireTauri();
+  const res = await executeRequest({
+    method: "GET",
+    url: RUNTIME_RELEASE_API,
+    // The API answers without a token for public repos, but it wants a UA.
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "DevHelper" },
+    body: undefined,
+  });
+  if (!res.ok) throw new LocalLlmError(`Could not reach GitHub to list llama.cpp releases (${res.status}).`);
+
+  const release = parseRelease(JSON.parse(res.body));
+  // CPU unless the caller says otherwise. There is no reliable GPU probe on this
+  // side — `check_environment` reports toolchains, not adapters — and guessing
+  // wrong installs a build that starts and then cannot load a model. The UI
+  // offers the other backends explicitly instead.
+  const chosen = flavor ?? "cpu";
+  const asset = pickRuntimeAsset(release.assets, chosen);
+  if (!asset) throw new LocalLlmError(`Release ${release.tag} has no Windows ${chosen} build.`);
+
+  return { tag: release.tag, flavor: chosen, asset, dest: runtimeDir(hubDir) };
+}
+
+export async function installRuntime(choice: RuntimeChoice): Promise<string> {
+  requireTauri();
+  const report = await invoke<{ runtime: string; files: number; bytes: number }>("llm_install_runtime", {
+    url: choice.asset.url,
+    dest: choice.dest,
+    expectedSha256: choice.asset.digest ?? null,
+  });
+  return report.runtime;
+}
+
+/** `<hub>/runtime` — the folder the discovery order looks in first. */
+export function runtimeDir(hubDir: string): string {
+  return `${hubDir.replace(/[/\\]+$/, "")}/${RUNTIME_SUBDIR}`;
 }

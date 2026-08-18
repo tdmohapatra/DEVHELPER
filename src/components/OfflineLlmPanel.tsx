@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { HardDrive, Play, RefreshCw, Square } from "lucide-react";
+import { Download, HardDrive, Play, RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { useAiStore } from "@/stores/useAiStore";
-import { findRuntime, scanModels, serverStatus, startServer, stopServer, type LlmStatus } from "@/lib/localLlmClient";
+import {
+  fetchRuntimeChoice, findRuntime, installRuntime, scanModels, serverStatus, startServer, stopServer,
+  type LlmStatus, type RuntimeChoice,
+} from "@/lib/localLlmClient";
+import { describeAsset, FLAVOR_LABELS, type RuntimeFlavor } from "@/tools/lib/llamaRelease";
 import { formatModelSize, offlineProblem, type LocalModel } from "@/tools/lib/localLlm";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +29,10 @@ export function OfflineLlmPanel() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<LlmStatus | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  // The engine install is a three-state affair on purpose: asking GitHub what it
+  // would download, showing the user that answer, and only then downloading.
+  const [choice, setChoice] = useState<RuntimeChoice | null>(null);
+  const [installing, setInstalling] = useState(false);
   const alive = useRef(true);
 
   useEffect(() => () => { alive.current = false; }, []);
@@ -102,6 +110,37 @@ export function OfflineLlmPanel() {
     }
   };
 
+  /** Ask what would be installed. Downloads nothing. */
+  const proposeInstall = async (flavor?: RuntimeFlavor) => {
+    setInstalling(true);
+    try {
+      setChoice(await fetchRuntimeChoice(ai.localHubDir, flavor));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      if (alive.current) setInstalling(false);
+    }
+  };
+
+  /** The step the user confirmed. */
+  const confirmInstall = async () => {
+    if (!choice) return;
+    setInstalling(true);
+    try {
+      const installed = await installRuntime(choice);
+      if (!alive.current) return;
+      setRuntime(installed);
+      setChoice(null);
+      toast.success("Engine installed. Now put a chat model in the folder and press Scan.");
+      await refresh(true);
+    } catch (e) {
+      if (!alive.current) return;
+      toast.error((e as Error).message);
+    } finally {
+      if (alive.current) setInstalling(false);
+    }
+  };
+
   const stop = async () => {
     setBusy(true);
     try {
@@ -130,14 +169,56 @@ export function OfflineLlmPanel() {
         </Labeled>
       </div>
 
+      {choice && (
+        /*
+          Consent, with the specifics. DevHelper is about to download an
+          executable and then run it, so the release, the exact file, its size
+          and the destination are all named before anything is fetched — and the
+          checksum GitHub publishes is verified in Rust before a byte is unpacked.
+        */
+        <div className="space-y-2 rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
+          <p className="font-medium">Install the llama.cpp engine?</p>
+          <ul className="space-y-0.5 text-xs text-muted-foreground">
+            <li>From: github.com/ggml-org/llama.cpp release <span className="font-mono">{choice.tag}</span></li>
+            <li>File: <span className="font-mono">{describeAsset(choice.asset)}</span></li>
+            <li>Backend: {FLAVOR_LABELS[choice.flavor]}</li>
+            <li>Into: <span className="font-mono">{choice.dest}</span></li>
+            <li>{choice.asset.digest ? "Checksum published by GitHub — verified before unpacking." : "No checksum published for this asset."}</li>
+          </ul>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button size="sm" onClick={() => void confirmInstall()} disabled={installing}>
+              {installing ? "Installing…" : "Download & install"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setChoice(null)} disabled={installing}>Cancel</Button>
+            {(["cpu", "cuda", "vulkan"] as RuntimeFlavor[])
+              .filter((f) => f !== choice.flavor)
+              .map((f) => (
+                <Button key={f} size="sm" variant="ghost" onClick={() => void proposeInstall(f)} disabled={installing}>
+                  Use {f.toUpperCase()} instead
+                </Button>
+              ))}
+          </div>
+        </div>
+      )}
+
       <div className="rounded-md border">
         <div className="flex items-center justify-between border-b px-3 py-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-2"><HardDrive className="size-3.5" /> {models.length} GGUF model{models.length === 1 ? "" : "s"}</span>
-          <span>{runtime ? `runtime: ${runtime}` : "runtime: not found"}</span>
+          {runtime ? (
+            <span className="truncate" title={runtime}>engine: {runtime}</span>
+          ) : (
+            <span className="flex items-center gap-2">
+              <span className="text-warning">engine: not installed</span>
+              <Button size="sm" variant="outline" onClick={() => void proposeInstall()} disabled={installing}>
+                <Download className="size-3.5" /> {installing && !choice ? "Checking…" : "Set up engine"}
+              </Button>
+            </span>
+          )}
         </div>
         {models.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            Nothing found under {ai.localHubDir}. Put .gguf files there and press Scan.
+            No models under {ai.localHubDir}. Put an instruct/chat .gguf file there and press Scan —
+            that is the only piece DevHelper cannot fetch for you.
           </p>
         ) : (
           <ul className="max-h-56 overflow-y-auto">

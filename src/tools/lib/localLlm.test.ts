@@ -288,7 +288,9 @@ describe("offlineProblem", () => {
     expect(msg).toContain("embedding model");
   });
 
-  it("names the missing runtime last, when the model side is settled", () => {
-    expect(offlineProblem({ ...ok, runtimePath: null })).toContain("llama-server.exe");
+  it("names the missing engine last, when the model side is settled", () => {
+    // And points at the button that installs it, rather than at a file name the
+    // user would have to go and find.
+    expect(offlineProblem({ ...ok, runtimePath: null })).toContain("Set up engine");
   });
 });
