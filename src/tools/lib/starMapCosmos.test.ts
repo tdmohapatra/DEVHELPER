@@ -229,7 +229,10 @@ describe("JPL's date format", () => {
     expect(d.getTime()).toBe(Date.UTC(2026, 7, 16, 22, 5));
     // What the naive route would have produced, wherever this test is running.
     const naive = new Date("2026-Aug-16 22:05");
-    expect(d.getTime() - naive.getTime()).toBe(naive.getTimezoneOffset() * -60000);
+    // toBeCloseTo rather than toBe: on a machine set to UTC the expected shift is
+    // `0 * -60000`, which is `-0`, and `toBe` uses Object.is — so this assertion
+    // passed in every timezone except the one CI runs in.
+    expect(d.getTime() - naive.getTime()).toBeCloseTo(naive.getTimezoneOffset() * -60000, 0);
   });
 
   it("copes with a date that carries no time", () => {
