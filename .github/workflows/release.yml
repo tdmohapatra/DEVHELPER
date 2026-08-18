@@ -68,8 +68,35 @@ jobs:
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "DevHelper ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See CHANGELOG.md for what changed. Download the .msi or the setup .exe below."
+          releaseBody: |
+            See CHANGELOG.md for what changed.
+
+            **Which download?**
+            - `DevHelper_x.y.z_x64-setup.exe` — the usual installer: Start-menu entry, uninstaller.
+            - `DevHelper_x.y.z_x64_en-US.msi` — the same thing for anyone who deploys by MSI.
+            - `DevHelper-vx.y.z-portable-x64.exe` — the application itself. Save it anywhere and double-click; nothing is installed.
+
+            All three need the Microsoft WebView2 runtime, which is already present on Windows 11 and on any up-to-date Windows 10.
           # Published as a draft so the artifacts can be checked before anyone is
           # pointed at them.
           releaseDraft: true
           prerelease: false
+
+      # A copy of the executable itself, next to the installers.
+      #
+      # Tauri only bundles installers, and "download, double-click, it runs" is a
+      # reasonable thing to want — for a machine you are trying DevHelper on, or one
+      # where you would rather not install anything. The exe carries its own
+      # frontend, so this is the whole application in one file; it needs the WebView2
+      # runtime, and nothing else.
+      - name: Attach a portable exe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $portable = "DevHelper-$tag-portable-x64.exe"
+          Copy-Item "src-tauri/target/release/devhelper.exe" $portable
+          # --clobber so re-running a release for the same tag replaces the asset
+          # rather than failing on a name that already exists.
+          gh release upload $tag $portable --clobber --repo $env:GITHUB_REPOSITORY

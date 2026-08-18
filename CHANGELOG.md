@@ -5,6 +5,52 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-08-18
+
+### Added — AI that runs on your own machine
+- **Offline models.** A third AI provider runs a GGUF file on this computer via
+  llama.cpp, so every AI tool works with no account, no key and no prompt leaving
+  the machine. Models live in a folder you choose (`C:/TDM/TDM_OFFLINE_LLMHUB` by
+  default) and are picked from a list rather than typed as a path. Split models are
+  grouped; an incomplete download says so; embedding models are labelled and
+  refused for chat, because they make vectors rather than answers.
+- **DevHelper installs what is missing.** The model folder is created on first
+  open. The llama.cpp engine is offered as a download — the confirmation names the
+  release, the exact file, its size, the backend and the destination, and the
+  checksum GitHub publishes is verified before anything is unpacked. A chat model
+  can be fetched the same way, from a short curated list, with a progress bar.
+  Nothing is downloaded without being described first, and models are the only
+  piece you can also supply yourself.
+- **Two switches instead of one picker.** Settings → AI has checkboxes for **Local
+  AI** and **Online AI**. Tick either, both or neither. With both on, the local
+  model answers and *nothing falls back to the internet* — a prompt you believed
+  was staying here does not travel because a server failed to start.
+- **AI Chat** (`Ctrl+K` → "AI Chat"). A real conversation with whichever AI is
+  switched on: history resent each turn so follow-ups work, the destination shown
+  on every reply, an editable system prompt. Held in memory only — a chat about a
+  production problem is where an identifier or a connection string gets pasted.
+
+### Fixed
+- **Local servers were unreachable.** The HTTP scope allowed `http://**`, and a URL
+  pattern without a port matches only 80 and 443 — so every request to a service on
+  its own port was refused before it left the app, which looked exactly like the
+  server being down. Ollama on 11434 had never worked either. Pinned with a test
+  that asserts the capability file against the plugin's own matcher.
+- **Map Lab had no CSS.** Tauri injects a nonce into every CSP directive it
+  controls, and a nonce disables `'unsafe-inline'` in that directive — so Star
+  Map's runtime `<style>` block and its inline style attributes were all refused in
+  the packaged build. The map still drew, because Leaflet positions its panes
+  through the CSSOM, so the symptom named the wrong culprit.
+- **A leaked model server.** Force-killing DevHelper left llama-server resident
+  with several gigabytes and no window to close. The child is now confined to a
+  Windows job object, so the kernel stops it however this process ends.
+
+### Changed
+- Every AI tool reaches the new provider through the same single `aiChat` entry
+  point, so PHI redaction covers offline use too — and `127.0.0.1` counts as a
+  local destination, which is what "trust local models" was always meant to mean.
+
+
 ### Added — Gadgets, and a map with a simulation lab
 - **New `Gadgets` sidebar category** for things that are not developer plumbing.
   Weather, notes and email are planned; only the map exists today, so the category

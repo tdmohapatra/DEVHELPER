@@ -27,7 +27,7 @@ export const WORKSPACE_VERSION = 1;
  * frontend bundle has no reader for it, and a wrong number in a backup is worse
  * than an explicit one.
  */
-export const APP_VERSION = "0.2.1";
+export const APP_VERSION = "0.2.2";
 
 export interface StoreSpec {
   /** localStorage key. */
