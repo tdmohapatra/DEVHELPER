@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
 import { OfflineLlmPanel } from "@/components/OfflineLlmPanel";
+import { Checkbox } from "@/components/ui/checkbox";
+import { routingNote } from "@/lib/aiRouting";
 import { useAppStore } from "@/stores/useAppStore";
 import { useAiStore, aiKeyRemembered, forgetAiKey, rememberAiKey } from "@/stores/useAiStore";
 import { secretsAvailable } from "@/lib/secrets";
@@ -42,6 +44,7 @@ import {
 export function Settings() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
+  const openView = useAppStore((s) => s.openView);
   const ai = useAiStore();
   const sound = useSoundStore();
   const [testing, setTesting] = useState(false);
@@ -71,34 +74,63 @@ export function Settings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bot className="size-4" /> AI (optional)</CardTitle>
           <CardDescription>
-            DevHelper works fully without AI. Configure a provider to enable AI tools — an offline model
-            from your own folder, an Ollama server, or a hosted API. Keys are stored locally.
+            DevHelper works fully without AI. Switch on either kind — a model on this PC, a hosted API,
+            or both. With both on, the local one answers and nothing falls back to the internet.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex gap-2">
-            <Button size="sm" variant={ai.provider === "local" ? "default" : "outline"} onClick={() => ai.set({ provider: "local" })}>Offline (this PC)</Button>
-            <Button size="sm" variant={ai.provider === "ollama" ? "default" : "outline"} onClick={() => ai.set({ provider: "ollama" })}>Ollama (local)</Button>
-            <Button size="sm" variant={ai.provider === "openai" ? "default" : "outline"} onClick={() => ai.set({ provider: "openai" })}>OpenAI-compatible</Button>
+        <CardContent className="space-y-4">
+          {/*
+            Two switches, not one picker. "Is the offline one on, is the cloud one
+            on" is how this gets talked about, and `resolveProvider` turns that
+            into the provider the rest of the code uses. Both on means local
+            answers — see aiRouting.ts for why there is no fallback.
+          */}
+          <div className="space-y-3">
+            <Checkbox
+              checked={ai.localEnabled}
+              onCheckedChange={(v) => ai.setSwitches({ localEnabled: v })}
+              label="Local AI — a model on this PC"
+              hint="Your own .gguf file, or an Ollama server. Prompts never leave the machine."
+            />
+            {ai.localEnabled && (
+              <div className="ml-6 space-y-3 border-l pl-4">
+                <div className="flex gap-2">
+                  <Button size="sm" variant={ai.localKind === "local" ? "default" : "outline"} onClick={() => ai.setSwitches({ localKind: "local" })}>Offline model file</Button>
+                  <Button size="sm" variant={ai.localKind === "ollama" ? "default" : "outline"} onClick={() => ai.setSwitches({ localKind: "ollama" })}>Ollama server</Button>
+                </div>
+                {ai.localKind === "local" ? (
+                  <OfflineLlmPanel />
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Labeled label="Ollama URL"><Input value={ai.ollamaUrl} onChange={(e) => ai.set({ ollamaUrl: e.target.value })} /></Labeled>
+                    <Labeled label="Model"><Input value={ai.ollamaModel} onChange={(e) => ai.set({ ollamaModel: e.target.value })} /></Labeled>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <Checkbox
+              checked={ai.onlineEnabled}
+              onCheckedChange={(v) => ai.setSwitches({ onlineEnabled: v })}
+              label="Online AI — a hosted API"
+              hint="OpenAI-compatible. Your prompts travel to someone else's server."
+            />
+            {ai.onlineEnabled && (
+              <div className="ml-6 grid grid-cols-2 gap-2 border-l pl-4">
+                <Labeled label="Base URL"><Input value={ai.openaiBaseUrl} onChange={(e) => ai.set({ openaiBaseUrl: e.target.value })} /></Labeled>
+                <Labeled label="Model"><Input value={ai.openaiModel} onChange={(e) => ai.set({ openaiModel: e.target.value })} /></Labeled>
+                <Labeled label="API Key" full><Input type="password" placeholder="sk-…" value={ai.openaiKey} onChange={(e) => ai.set({ openaiKey: e.target.value })} /></Labeled>
+                <div className="col-span-2"><RememberKey apiKey={ai.openaiKey} /></div>
+              </div>
+            )}
           </div>
-          {ai.provider === "local" ? (
-            <OfflineLlmPanel />
-          ) : ai.provider === "ollama" ? (
-            <div className="grid grid-cols-2 gap-2">
-              <Labeled label="Ollama URL"><Input value={ai.ollamaUrl} onChange={(e) => ai.set({ ollamaUrl: e.target.value })} /></Labeled>
-              <Labeled label="Model"><Input value={ai.ollamaModel} onChange={(e) => ai.set({ ollamaModel: e.target.value })} /></Labeled>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <Labeled label="Base URL"><Input value={ai.openaiBaseUrl} onChange={(e) => ai.set({ openaiBaseUrl: e.target.value })} /></Labeled>
-              <Labeled label="Model"><Input value={ai.openaiModel} onChange={(e) => ai.set({ openaiModel: e.target.value })} /></Labeled>
-              <Labeled label="API Key" full><Input type="password" placeholder="sk-…" value={ai.openaiKey} onChange={(e) => ai.set({ openaiKey: e.target.value })} /></Labeled>
-              <div className="col-span-2"><RememberKey apiKey={ai.openaiKey} /></div>
-            </div>
-          )}
-          <div className="flex items-center gap-2">
+
+          <p className="text-xs text-muted-foreground">{routingNote(ai)}</p>
+
+          <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={testAi} disabled={testing || !ai.isConfigured()}>{testing ? "Testing…" : "Test connection"}</Button>
             <Badge variant={ai.isConfigured() ? "success" : "secondary"}>{ai.isConfigured() ? "configured" : "not configured"}</Badge>
+            <Button size="sm" variant="ghost" onClick={() => openView({ kind: "tool", toolId: "ai-chat" })} disabled={!ai.isConfigured()}>Open AI Chat</Button>
             {ai.provider === "openai" && <span className="text-xs text-muted-foreground">⚠ OpenAI sends data to an external server.</span>}
           </div>
         </CardContent>

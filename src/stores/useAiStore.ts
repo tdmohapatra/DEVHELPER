@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { aiAccount, deleteSecret, getSecret, setSecret } from "@/lib/secrets";
 
 import { DEFAULT_HUB_DIR } from "@/tools/lib/localLlm";
+import { resolveProvider, switchesForProvider, type LocalKind } from "@/lib/aiRouting";
 
 /**
  * `local` is a GGUF file on this machine, served by a llama.cpp process
@@ -13,7 +14,19 @@ import { DEFAULT_HUB_DIR } from "@/tools/lib/localLlm";
 export type AiProvider = "ollama" | "openai" | "local";
 
 interface AiState {
+  /**
+   * Where prompts go. Derived from the two switches below — set those, not this.
+   * It stays a plain field because every consumer (`lib/ai.ts`, the PHI gateway)
+   * only ever needs the answer, not how it was reached.
+   */
   provider: AiProvider;
+
+  /** Local AI switched on: an offline model file, or Ollama. */
+  localEnabled: boolean;
+  /** Online AI switched on: a hosted OpenAI-compatible API. */
+  onlineEnabled: boolean;
+  /** Which kind of local, when Local AI is on. */
+  localKind: LocalKind;
   ollamaUrl: string;
   ollamaModel: string;
   openaiBaseUrl: string;
@@ -39,13 +52,18 @@ interface AiState {
   localRunning: boolean;
 
   set: (patch: Partial<AiState>) => void;
+  /** Flip the switches. Recomputes `provider` so the two cannot disagree. */
+  setSwitches: (patch: { localEnabled?: boolean; onlineEnabled?: boolean; localKind?: LocalKind }) => void;
   isConfigured: () => boolean;
 }
 
 export const useAiStore = create<AiState>()(
   persist(
     (set, get) => ({
-      provider: "ollama",
+      provider: "local",
+      localEnabled: true,
+      onlineEnabled: false,
+      localKind: "local",
       ollamaUrl: "http://localhost:11434",
       ollamaModel: "llama3.1",
       openaiBaseUrl: "https://api.openai.com/v1",
@@ -63,8 +81,17 @@ export const useAiStore = create<AiState>()(
       localRunning: false,
 
       set: (patch) => set(patch),
+      setSwitches: (patch) => {
+        const next = { ...get(), ...patch };
+        const provider = resolveProvider(next);
+        // Both off leaves `provider` at its last value; `isConfigured` is what
+        // reports "off", so nothing downstream has to handle a null provider.
+        set({ ...patch, ...(provider ? { provider } : {}) });
+      },
       isConfigured: () => {
         const s = get();
+        // Both switches off is a supported state: AI is simply not in use.
+        if (!s.localEnabled && !s.onlineEnabled) return false;
         if (s.provider === "ollama") return !!s.ollamaUrl && !!s.ollamaModel;
         // A chosen model is not a reachable one. Until the server is up there is
         // nothing to send a prompt to, and a tool that says "configured" and then
@@ -88,6 +115,17 @@ export const useAiStore = create<AiState>()(
        * them would have DevHelper confidently address a port nobody is on.
        */
       partialize: ({ openaiKey: _key, localPort: _port, localRunning: _running, ...rest }) => rest,
+      /**
+       * Version 1 introduced the switches. A setting saved before them has only
+       * a provider, and inferring the switches from it is what keeps an upgrade
+       * from silently moving someone's prompts to a different destination.
+       */
+      version: 1,
+      migrate: (persisted, from) => {
+        const state = (persisted ?? {}) as Partial<AiState>;
+        if (from >= 1 || state.localEnabled !== undefined) return state as AiState;
+        return { ...state, ...switchesForProvider(state.provider ?? "ollama") } as AiState;
+      },
     },
   ),
 );

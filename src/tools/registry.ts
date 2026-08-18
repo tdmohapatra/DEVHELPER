@@ -60,7 +60,7 @@ import {
   CalendarClock,
   Map as MapIcon,
   NotebookPen,
-  Cable,
+  Cable, MessagesSquare,
 } from "lucide-react";
 import type { Tool } from "./types";
 
@@ -638,6 +638,16 @@ export const TOOLS: Tool[] = [
     ],
     route: "/tools/phi-gateway",
     component: L(() => import("./impl/PhiGateway"), "PhiGateway"),
+  },
+  {
+    id: "ai-chat",
+    name: "AI Chat",
+    description: "A conversation with the AI that is switched on, offline or hosted",
+    category: "ai",
+    icon: MessagesSquare,
+    keywords: ["chat", "ai", "ask", "conversation", "assistant", "qna", "question", "local", "offline", "llm"],
+    route: "/tools/ai-chat",
+    component: L(() => import("./impl/AiChat"), "AiChat"),
   },
   {
     id: "error-explainer",
