@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/CopyButton";
+import { OfflineLlmPanel } from "@/components/OfflineLlmPanel";
 import { useAppStore } from "@/stores/useAppStore";
 import { useAiStore, aiKeyRemembered, forgetAiKey, rememberAiKey } from "@/stores/useAiStore";
 import { secretsAvailable } from "@/lib/secrets";
@@ -69,14 +70,20 @@ export function Settings() {
       <Card className="mb-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bot className="size-4" /> AI (optional)</CardTitle>
-          <CardDescription>DevHelper works fully without AI. Configure a provider to enable AI tools. Keys are stored locally.</CardDescription>
+          <CardDescription>
+            DevHelper works fully without AI. Configure a provider to enable AI tools — an offline model
+            from your own folder, an Ollama server, or a hosted API. Keys are stored locally.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex gap-2">
+            <Button size="sm" variant={ai.provider === "local" ? "default" : "outline"} onClick={() => ai.set({ provider: "local" })}>Offline (this PC)</Button>
             <Button size="sm" variant={ai.provider === "ollama" ? "default" : "outline"} onClick={() => ai.set({ provider: "ollama" })}>Ollama (local)</Button>
             <Button size="sm" variant={ai.provider === "openai" ? "default" : "outline"} onClick={() => ai.set({ provider: "openai" })}>OpenAI-compatible</Button>
           </div>
-          {ai.provider === "ollama" ? (
+          {ai.provider === "local" ? (
+            <OfflineLlmPanel />
+          ) : ai.provider === "ollama" ? (
             <div className="grid grid-cols-2 gap-2">
               <Labeled label="Ollama URL"><Input value={ai.ollamaUrl} onChange={(e) => ai.set({ ollamaUrl: e.target.value })} /></Labeled>
               <Labeled label="Model"><Input value={ai.ollamaModel} onChange={(e) => ai.set({ ollamaModel: e.target.value })} /></Labeled>

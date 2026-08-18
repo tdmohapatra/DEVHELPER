@@ -2,6 +2,7 @@ import { useAiStore } from "@/stores/useAiStore";
 import { usePhiStore } from "@/stores/usePhiStore";
 import { executeRequest } from "./http";
 import { applyPolicyToMessages, isLocalDestination, reidentify, type PhiKind, type PhiPolicy } from "@/tools/lib/phi";
+import { localBaseUrl } from "@/tools/lib/localLlm";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -26,7 +27,9 @@ export class PhiBlockedError extends Error {
 /** Where the current provider sends data. */
 export function aiEndpoint(): string {
   const cfg = useAiStore.getState();
-  return cfg.provider === "ollama" ? cfg.ollamaUrl : cfg.openaiBaseUrl;
+  if (cfg.provider === "ollama") return cfg.ollamaUrl;
+  if (cfg.provider === "local") return localBaseUrl(cfg.localPort);
+  return cfg.openaiBaseUrl;
 }
 
 /**
@@ -99,12 +102,25 @@ async function send(messages: ChatMessage[]): Promise<string> {
     return json.message?.content ?? "";
   }
 
-  // OpenAI-compatible
+  // OpenAI-compatible — both the hosted APIs and llama-server, which speaks the
+  // same shape. The only differences are the base URL and that a server on this
+  // machine has no key to send: an Authorization header with an empty bearer
+  // makes some builds answer 401 instead of ignoring it.
+  const local = cfg.provider === "local";
+  if (local && !cfg.localPort) throw new AiNotConfiguredError();
+
+  const base = local ? localBaseUrl(cfg.localPort) : cfg.openaiBaseUrl;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (!local) headers.Authorization = `Bearer ${cfg.openaiKey}`;
+
   const res = await executeRequest({
     method: "POST",
-    url: `${cfg.openaiBaseUrl.replace(/\/$/, "")}/chat/completions`,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.openaiKey}` },
-    body: JSON.stringify({ model: cfg.openaiModel, messages }),
+    url: `${base.replace(/\/$/, "")}/chat/completions`,
+    headers,
+    body: JSON.stringify({
+      model: local ? cfg.localModelLabel || "local-model" : cfg.openaiModel,
+      messages,
+    }),
   });
   if (!res.ok) throw new Error(`AI error ${res.status}: ${res.body.slice(0, 300)}`);
   const json = JSON.parse(res.body);
@@ -114,7 +130,9 @@ async function send(messages: ChatMessage[]): Promise<string> {
 /** Where does data go for the current provider? For privacy notices. */
 export function aiDestinationLabel(): string {
   const cfg = useAiStore.getState();
-  return cfg.provider === "ollama"
-    ? `local Ollama (${cfg.ollamaUrl})`
-    : `external API (${cfg.openaiBaseUrl})`;
+  if (cfg.provider === "ollama") return `local Ollama (${cfg.ollamaUrl})`;
+  if (cfg.provider === "local") {
+    return `offline model on this machine (${cfg.localModelLabel || "no model"})`;
+  }
+  return `external API (${cfg.openaiBaseUrl})`;
 }

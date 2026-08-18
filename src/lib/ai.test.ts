@@ -141,6 +141,64 @@ describe("aiChat", () => {
   });
 });
 
+/**
+ * The offline provider, at the wiring that distinguishes it.
+ *
+ * A GGUF file served by a llama.cpp process on this machine speaks the same
+ * OpenAI shape as the hosted APIs, so almost nothing is different — and the
+ * "almost" is what is asserted here: where the request goes, that it carries no
+ * bearer token, and that a chosen-but-not-running model is not "configured".
+ */
+describe("aiChat with an offline model", () => {
+  const reply = (content: string) =>
+    executeRequest.mockResolvedValue({
+      status: 200, statusText: "", headers: {},
+      body: JSON.stringify({ choices: [{ message: { content } }] }),
+      timeMs: 1, sizeBytes: 0, ok: true,
+    });
+  const sent = () => executeRequest.mock.calls[0][0];
+
+  beforeEach(() => {
+    executeRequest.mockReset();
+    usePhiStore.setState({ policy: "redact", trustLocal: true, log: [] });
+    useAiStore.setState({
+      provider: "local",
+      localModelPath: "C:/TDM/TDM_OFFLINE_LLMHUB/llama-8b-Q4_K_M.gguf",
+      localModelLabel: "llama-8b-Q4_K_M",
+      localPort: 8081,
+      localRunning: true,
+    });
+  });
+
+  it("posts to the loopback server that DevHelper started", async () => {
+    reply("ok");
+    await aiChat([{ role: "user", content: "hi" }]);
+    expect(sent().url).toBe("http://127.0.0.1:8081/v1/chat/completions");
+    expect(JSON.parse(sent().body).model).toBe("llama-8b-Q4_K_M");
+  });
+
+  it("sends no Authorization header — there is no key, and an empty bearer gets a 401", async () => {
+    reply("ok");
+    await aiChat([{ role: "user", content: "hi" }]);
+    expect(Object.keys(sent().headers)).not.toContain("Authorization");
+  });
+
+  it("is not configured while the model is only chosen", async () => {
+    useAiStore.setState({ localRunning: false, localPort: 0 });
+    await expect(aiChat([{ role: "user", content: "hi" }])).rejects.toBeInstanceOf(AiNotConfiguredError);
+    expect(executeRequest).not.toHaveBeenCalled();
+  });
+
+  it("counts as a machine-local destination, so trustLocal applies", () => {
+    expect(activePolicy()).toMatchObject({ policy: "off", local: true });
+  });
+
+  it("still redacts when the local destination is not trusted", () => {
+    usePhiStore.setState({ trustLocal: false });
+    expect(activePolicy().policy).toBe("redact");
+  });
+});
+
 describe("activePolicy", () => {
   beforeEach(() => usePhiStore.setState({ policy: "redact", trustLocal: true }));
 

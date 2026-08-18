@@ -1,8 +1,8 @@
 mod commands;
 
 use commands::{
-    db, devicelink, docker, files, mssql, nats, network, ports, process, redis, scan, secrets, sysprobe,
-    system, toolchain, ws,
+    db, devicelink, docker, files, llm, mssql, nats, network, ports, process, redis, scan, secrets,
+    sysprobe, system, toolchain, ws,
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -50,6 +50,18 @@ pub fn run() {
         .manage(redis::RedisWatchers::default())
         // Live device links: MLLP over TCP and ASTM over a serial port.
         .manage(devicelink::LinkRegistry::default())
+        // The local model server. Managed state rather than a global because
+        // its Drop is what guarantees no llama-server survives the app.
+        .manage(llm::LlmState::default())
+        // Closing the window has to take the model server with it. `LlmState`
+        // does kill the child on Drop, but the tray's Quit calls `app.exit`,
+        // and a process that exits does not run destructors — so the shutdown
+        // that actually happens is this one.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<llm::LlmState>().stop();
+            }
+        })
         .setup(move |app| {
             // System tray with a quick-actions menu.
             let open = MenuItem::with_id(app, "open", "Open DevHelper", true, None::<&str>)?;
@@ -120,6 +132,11 @@ pub fn run() {
             toolchain::toolchain_probe,
             toolchain::toolchain_install,
             toolchain::toolchain_winget_available,
+            llm::llm_find_runtime,
+            llm::llm_free_port,
+            llm::llm_start,
+            llm::llm_status,
+            llm::llm_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevHelper");
